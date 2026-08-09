@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { Audio } from 'expo-av';
 import * as Speech from 'expo-speech';
+import * as FileSystem from 'expo-file-system';
 
 const PRODUCTION_SERVER = 'wss://voicecartai.onrender.com/web-stream';
 const LOCAL_WIFI_SERVER = 'ws://10.195.48.140:3001/web-stream';
@@ -25,6 +26,7 @@ export default function App() {
   const [cartTotal, setCartTotal] = useState(0);
   const [textInput, setTextInput] = useState('');
   const [aiSpeaking, setAiSpeaking] = useState(false);
+  const [isRecordingVoice, setIsRecordingVoice] = useState(false);
 
   const wsRef = useRef(null);
   const recordingRef = useRef(null);
@@ -51,7 +53,7 @@ export default function App() {
   async function startCall() {
     try {
       setCallState('connecting');
-      setTranscript([{ speaker: 'ai', text: 'Connecting to VoiceCart AI...' }]);
+      setTranscript([{ speaker: 'ai', text: 'Connecting to VoiceCart AI Assistant...' }]);
 
       // Wake up Render server if using production URL
       if (serverUrl.includes('onrender.com')) {
@@ -63,7 +65,6 @@ export default function App() {
       ws.onopen = () => {
         setCallState('active');
         ws.send(JSON.stringify({ type: 'start' }));
-        startAudioRecording(ws);
       };
 
       ws.onmessage = async (e) => {
@@ -117,15 +118,54 @@ export default function App() {
     }
   }
 
-  // ── Native Audio Recording ──
-  async function startAudioRecording(ws) {
-    try {
-      const { recording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
-      recordingRef.current = recording;
-    } catch (e) {
-      console.warn('Native recording start error:', e);
+  // ── Voice Recording & Audio Streaming ──
+  async function toggleVoiceRecording() {
+    if (!wsRef.current || callState !== 'active') return;
+
+    if (isRecordingVoice) {
+      // Stop Recording & Send Audio
+      try {
+        setIsRecordingVoice(false);
+        const recording = recordingRef.current;
+        if (recording) {
+          await recording.stopAndUnloadAsync();
+          const uri = recording.getURI();
+          recordingRef.current = null;
+
+          if (uri) {
+            const base64Audio = await FileSystem.readAsStringAsync(uri, {
+              encoding: FileSystem.EncodingType.Base64,
+            });
+
+            // Send base64 audio packet to backend WebSocket
+            wsRef.current.send(
+              JSON.stringify({
+                type: 'audio',
+                data: base64Audio,
+              })
+            );
+
+            setTranscript((prev) => [...prev, { speaker: 'user', text: '🎙️ [Spoken Audio Sent]' }]);
+          }
+        }
+      } catch (err) {
+        console.warn('Stop voice recording error:', err);
+        setIsRecordingVoice(false);
+      }
+    } else {
+      // Start Recording Voice
+      try {
+        Speech.stop();
+        setAiSpeaking(false);
+        const { recording } = await Audio.Recording.createAsync(
+          Audio.RecordingOptionsPresets.HIGH_QUALITY
+        );
+        recordingRef.current = recording;
+        setIsRecordingVoice(true);
+      } catch (err) {
+        console.warn('Start voice recording error:', err);
+        Alert.alert('Microphone Error', 'Could not start microphone recording.');
+      }
     }
   }
 
@@ -147,14 +187,16 @@ export default function App() {
     }
     setCallState('idle');
     setAiSpeaking(false);
+    setIsRecordingVoice(false);
   }
 
   // ── Send Text Message ──
-  function sendText() {
-    if (!textInput.trim() || !wsRef.current) return;
-    const txt = textInput.trim();
-    wsRef.current.send(JSON.stringify({ type: 'text', text: txt }));
-    setTranscript((prev) => [...prev, { speaker: 'user', text: txt }]);
+  function sendText(txt = textInput) {
+    const textToSend = (typeof txt === 'string' ? txt : textInput).trim();
+    if (!textToSend || !wsRef.current) return;
+    Speech.stop();
+    wsRef.current.send(JSON.stringify({ type: 'text', text: textToSend }));
+    setTranscript((prev) => [...prev, { speaker: 'user', text: textToSend }]);
     setTextInput('');
   }
 
@@ -187,38 +229,84 @@ export default function App() {
         </TouchableOpacity>
       </View>
 
-      {/* Call Status & Big Button */}
+      {/* Call Status & Controls */}
       <View style={styles.callCard}>
         {callState === 'connecting' && <ActivityIndicator size="large" color="#10b981" />}
 
         {callState === 'active' && (
           <View style={styles.liveIndicator}>
-            <View style={styles.liveDot} />
-            <Text style={styles.liveText}>
-              {aiSpeaking ? '🤖 AI Speaking...' : '🎤 Listening to your voice...'}
+            <View style={[styles.liveDot, isRecordingVoice && styles.recordingDot]} />
+            <Text style={[styles.liveText, isRecordingVoice && styles.recordingText]}>
+              {isRecordingVoice
+                ? '🔴 Recording voice... Tap "Send Voice" when done'
+                : aiSpeaking
+                ? '🤖 AI Speaking...'
+                : '🎤 Call Active — Tap Mic to Speak'}
             </Text>
           </View>
         )}
 
-        <TouchableOpacity
-          style={[
-            styles.callButton,
-            callState === 'active' ? styles.callButtonActive : styles.callButtonIdle,
-          ]}
-          onPress={callState === 'active' ? endCall : startCall}
-        >
-          <Text style={styles.callButtonIcon}>
-            {callState === 'active' ? '📞' : '🎙️'}
-          </Text>
-          <Text style={styles.callButtonText}>
-            {callState === 'active'
-              ? 'End Call'
-              : callState === 'connecting'
-              ? 'Connecting...'
-              : 'Start Voice Order Call'}
-          </Text>
-        </TouchableOpacity>
+        <View style={styles.buttonRow}>
+          <TouchableOpacity
+            style={[
+              styles.callButton,
+              callState === 'active' ? styles.callButtonActive : styles.callButtonIdle,
+            ]}
+            onPress={callState === 'active' ? endCall : startCall}
+          >
+            <Text style={styles.callButtonIcon}>
+              {callState === 'active' ? '📞' : '🎙️'}
+            </Text>
+            <Text style={styles.callButtonText}>
+              {callState === 'active'
+                ? 'End Call'
+                : callState === 'connecting'
+                ? 'Connecting...'
+                : 'Start Voice Order Call'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Dedicated Push-to-Talk Microphone Button when Active */}
+        {callState === 'active' && (
+          <TouchableOpacity
+            style={[
+              styles.micButton,
+              isRecordingVoice ? styles.micButtonRecording : styles.micButtonNormal,
+            ]}
+            onPress={toggleVoiceRecording}
+          >
+            <Text style={styles.micButtonText}>
+              {isRecordingVoice ? '⏹️ Send Voice Input' : '🎤 Tap to Speak Voice Input'}
+            </Text>
+          </TouchableOpacity>
+        )}
       </View>
+
+      {/* Quick Voice Order Test Shortcuts */}
+      {callState === 'active' && (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.shortcutsBar}>
+          <TouchableOpacity style={styles.shortcutChip} onPress={() => sendText('1 chicken biryani')}>
+            <Text style={styles.chipText}>🍗 1 Chicken Biryani</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.shortcutChip} onPress={() => sendText('2 mutton biryani')}>
+            <Text style={styles.chipText}>🥩 2 Mutton Biryani</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.shortcutChip} onPress={() => sendText('Total how much?')}>
+            <Text style={styles.chipText}>💰 Total how much?</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.shortcutChip} onPress={() => sendText('Deliver to 42 DB Road near Senthil Hospital')}>
+            <Text style={styles.chipText}>📍 42 DB Road</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.shortcutChip} onPress={() => sendText('Yes confirm order')}>
+            <Text style={styles.chipText}>✅ Confirm Order</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      )}
 
       {/* Live Order Sub-Cart Preview */}
       {cartItems.length > 0 && (
@@ -271,9 +359,9 @@ export default function App() {
             onChangeText={setTextInput}
             placeholder="Or type an order..."
             placeholderTextColor="#64748b"
-            onSubmitEditing={sendText}
+            onSubmitEditing={() => sendText()}
           />
-          <TouchableOpacity style={styles.sendBtn} onPress={sendText}>
+          <TouchableOpacity style={styles.sendBtn} onPress={() => sendText()}>
             <Text style={styles.sendBtnText}>Send</Text>
           </TouchableOpacity>
         </View>
@@ -326,7 +414,7 @@ const styles = StyleSheet.create({
   },
   callCard: {
     margin: 16,
-    padding: 20,
+    padding: 16,
     backgroundColor: '#1e293b',
     borderRadius: 16,
     alignItems: 'center',
@@ -334,7 +422,7 @@ const styles = StyleSheet.create({
   liveIndicator: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 10,
   },
   liveDot: {
     width: 8,
@@ -343,10 +431,19 @@ const styles = StyleSheet.create({
     backgroundColor: '#10b981',
     marginRight: 6,
   },
+  recordingDot: {
+    backgroundColor: '#ef4444',
+  },
   liveText: {
     color: '#10b981',
     fontSize: 13,
     fontWeight: '600',
+  },
+  recordingText: {
+    color: '#ef4444',
+  },
+  buttonRow: {
+    width: '100%',
   },
   callButton: {
     flexDirection: 'row',
@@ -371,6 +468,42 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 16,
     fontWeight: '700',
+  },
+  micButton: {
+    marginTop: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 20,
+    width: '100%',
+    alignItems: 'center',
+  },
+  micButtonNormal: {
+    backgroundColor: '#3b82f6',
+  },
+  micButtonRecording: {
+    backgroundColor: '#dc2626',
+  },
+  micButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  shortcutsBar: {
+    marginHorizontal: 16,
+    marginBottom: 10,
+    maxHeight: 40,
+  },
+  shortcutChip: {
+    backgroundColor: '#334155',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    marginRight: 8,
+  },
+  chipText: {
+    color: '#e2e8f0',
+    fontSize: 12,
+    fontWeight: '600',
   },
   cartCard: {
     marginHorizontal: 16,
