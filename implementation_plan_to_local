@@ -1,0 +1,104 @@
+# Implementation Plan — Migration to 100% Local Open-Source GPU Engine
+
+This plan outlines the technical blueprint to transition **VoiceCart AI** from **Cloud APIs (Mode A)** to a **100% Local Open-Source Stack (Mode B)** once a GPU VPS (NVIDIA 6GB–8GB VRAM) or Apple Silicon server is provisioned.
+
+---
+
+## Technical Objectives & Value
+
+1. **$0 Per-Call API Costs**: Eliminate monthly API bills from Google Cloud STT/TTS and Gemini LLM.
+2. **Sub-400ms E2E Latency**: Achieve instantaneous, sub-half-second response times by eliminating international cloud network round-trips.
+3. **100% Native Tamil & Tanglish Accuracy**: Use `pratilekha-v0-small` (Whisper-LoRA fine-tuned on Indic accents) and `Piper TTS` (trained on AI4Bharat `IndicVoices-R` dataset).
+4. **Dual-Engine Flexibility**: Maintain a seamless feature flag (`AI_ENGINE_MODE=local` vs `cloud`) so the system can instantly switch modes without downtime.
+
+---
+
+## Target Local Open-Source Stack
+
+```mermaid
+graph TD
+    A["📞 Telephony / Web Stream<br/>(WebSocket 8kHz/16kHz)"] --> B{"🎛️ AI_ENGINE_MODE<br/>(server/.env)"}
+    
+    subgraph Local GPU Stack (Mode B)
+        B -- "local" --> C["🎤 Local STT Service<br/>(faster-whisper + pratilekha-v0-small)<br/>~150ms"]
+        C --> D["🧠 Local LLM Brain<br/>(Ollama + Qwen 2.5 3B Instruct)<br/>~180ms"]
+        D --> E["🔊 Local TTS Synthesizer<br/>(Piper ONNX + IndicVoices Tamil)<br/>~80ms"]
+        E --> F["🎧 PCM / Mu-law Audio Response<br/>(<400ms E2E Latency)"]
+    end
+
+    subgraph Cloud Stack (Mode A - Current)
+        B -- "cloud" --> G["Google Cloud STT v2"]
+        G --> H["Google Gemini 2.5 Flash"]
+        H --> I["Google Cloud TTS"]
+        I --> F
+    end
+
+    D --> J["📊 SQLite DB & KDS Order Dispatch"]
+```
+
+---
+
+## User Review Required
+
+> [!IMPORTANT]
+> **Hardware Provisioning**: This local mode requires a GPU VPS with at least **6GB–8GB VRAM** (e.g., NVIDIA RTX 3060/4060, A10G, or Apple Silicon M1/M2/M3 Mac) with Ollama and Python/ONNX runtimes pre-installed.
+
+> [!NOTE]
+> **Seamless Migration**: The existing Cloud API engine remains **100% active and untouched** as the primary default until the local GPU server is ready.
+
+---
+
+## Proposed Changes
+
+### Server Configuration & Routing
+
+#### [MODIFY] [.env](file:///c:/Users/midun/OneDrive/Desktop/Inkiro/server/.env)
+Add environment switches for local AI engines:
+```env
+AI_ENGINE_MODE=cloud              # Options: 'cloud' or 'local'
+LOCAL_OLLAMA_URL=http://localhost:11434
+LOCAL_WHISPER_WS=ws://localhost:9001
+LOCAL_PIPER_MODEL=./models/ta_IN-indicvoices-medium.onnx
+```
+
+---
+
+### New Local Microservices (`/server/src/services/`)
+
+#### [NEW] [localSttService.js](file:///c:/Users/midun/OneDrive/Desktop/Inkiro/server/src/services/localSttService.js)
+- Interfaces with local `faster-whisper` C++ WebSocket server loaded with Hugging Face model `anuran-roy/pratilekha-v0-small`.
+- Streams 16kHz PCM audio bytes and emits native Tamil/English transcripts in ~150ms.
+
+#### [NEW] [localLlmService.js](file:///c:/Users/midun/OneDrive/Desktop/Inkiro/server/src/services/localLlmService.js)
+- Communicates with local `Ollama` API (`http://localhost:11434/api/generate`) running `Qwen-2.5-3B-Instruct`.
+- Uses system prompt rules to output strict JSON slot states (items, quantities, variants, addresses, prices).
+
+#### [NEW] [localTtsService.js](file:///c:/Users/midun/OneDrive/Desktop/Inkiro/server/src/services/localTtsService.js)
+- Executes local `Piper` ONNX binary loaded with `ta_IN-indicvoices-medium.onnx` weights.
+- Converts generated Tamil response text to G.711 mu-law audio buffer in ~80ms.
+
+#### [MODIFY] [dialogueManager.js](file:///c:/Users/midun/OneDrive/Desktop/Inkiro/server/src/services/dialogueManager.js)
+- Updates `processDialogueTurn()` to dynamically route requests based on `process.env.AI_ENGINE_MODE`:
+  - If `local`, calls `localLlmService.js`.
+  - If `cloud`, calls `GoogleGenerativeAI` (Gemini Flash).
+  - Falls back to built-in rule engine if both are unreachable.
+
+---
+
+### Operations Dashboard Enhancements (`/client/src/components/`)
+
+#### [MODIFY] [Sidebar.jsx](file:///c:/Users/midun/OneDrive/Desktop/Inkiro/client/src/components/Sidebar.jsx) & [VoiceSimulator.jsx](file:///c:/Users/midun/OneDrive/Desktop/Inkiro/client/src/components/VoiceSimulator.jsx)
+- Display an active **Engine Badge** (`⚡ LOCAL (Qwen 2.5 + Whisper)` vs `☁️ CLOUD (Gemini + GCP)`).
+- Add a 1-click **RLHF Feedback Button** on conversation turns to let restaurant operators correct transcripts and save training data for LoRA model updates.
+
+---
+
+## Verification Plan
+
+### Automated Tests
+1. **Engine Routing Unit Test**: Verify that toggling `AI_ENGINE_MODE=local` routes dialogue requests to Ollama without throwing errors.
+2. **Local Audio Benchmark**: Measure end-to-end latency from audio frame input to speech audio output (Target: <400ms).
+
+### Manual Verification
+1. Run local test voice orders through the Voice Simulator using Tamil, Tanglish, and English phrasing.
+2. Verify order items, quantities, and addresses extract cleanly into SQLite DB and display on the KDS board.

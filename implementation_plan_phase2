@@ -1,0 +1,145 @@
+# Master Implementation Plan: VoiceCart AI End-to-End Platform Expansion
+
+This master plan covers the complete end-to-end vision for **VoiceCart AI**, incorporating all customer delight features, merchant revenue tools, telephony intelligence, and edge-case handling.
+
+---
+
+## 🧭 Complete Feature Matrix (100% Scope)
+
+```mermaid
+graph TD
+    A["📞 Inbound Call / Missed Call / DTMF / Web"] --> B["👤 Caller Identity & Profile Lookup<br/>(Phone # -> Addresses, Dietary, Last Order)"]
+    
+    B --> C{"⚡ Interaction Path"}
+    C -- "DTMF Press 1 / 'Repeat Last'" --> D["🚀 5-Second Instant Repeat"]
+    C -- "Group Order Mode" --> E["🧑🤝🧑 Multi-Person Sub-Carts"]
+    C -- "Scheduled Order" --> F["📆 Future Delivery Scheduler"]
+    C -- "Standard Voice Order" --> G["🗣️ Bilingual Voice Dialogue"]
+    
+    G --> H["🕌 Dietary Filtering (Jain, Halal, Veg)"]
+    G --> I["🔊 Audio-Menu Specials & Upsells"]
+    G --> J["📍 Landmark Geocoding & Fallback Pin Drop"]
+    
+    D & E & F & G --> K["📦 ONDC & POS Dispatch Engine"]
+    K --> L["💬 WhatsApp & SMS Visual Receipt + 1-Tap Reorder"]
+    K --> M["🎙️ Dispute Resolution Pack (Audio + Logs in KDS)"]
+    K --> N["📊 Merchant Voice Analytics & Drop-off Insights"]
+```
+
+---
+
+## 🔍 Detailed Features & Newly Added Components
+
+Here are the specific capabilities added to ensure no feature is left out:
+
+1. **📍 Fallback SMS Web Pin Drop (Edge Case Solution)**:
+   - When spoken landmark geocoding confidence is low, system sends an SMS link (`/pin/:orderId`) with an interactive mobile map widget allowing 1-tap exact pin confirmation.
+2. **🕌 Dietary & Religious Profiles**:
+   - Support for customer dietary tags (`Jain`, `Halal`, `Pure Veg`, `No Onion/Garlic`) that automatically filter the menu and warn the caller during voice order taking.
+3. **📆 Scheduled Orders**:
+   - AI extracts future delivery times (*"Deliver tomorrow at 8 PM"*) and saves them with active delivery cron triggers.
+4. **🧑🤝🧑 Group Order Mode**:
+   - Handles multi-person orders in a single call (*"I'm ordering for 3 people: Karthik wants 1 biryani, Priya wants paneer..."*), producing itemized sub-labels on KDS tickets.
+5. **⚡ DTMF Quick-Reorder ("Press 1")**:
+   - Inbound Twilio IVR option allowing callers to press `1` to instantly repeat their last saved order without waiting for speech processing.
+6. **📊 Merchant Voice Analytics & Lost Call Insights**:
+   - Visual dashboard metrics tracking peak voice call hours, abandoned calls, most misheard items, and conversation latency.
+
+---
+
+## 🛠️ Step-by-Step Implementation Roadmap
+
+### Step 1: Database Layer Expansion (`server/src/db.js`)
+#### [MODIFY] [db.js](file:///c:/Users/midun/OneDrive/Desktop/Inkiro/server/src/db.js)
+Add and migrate the following production tables in `voicecart.db`:
+1. `customer_profiles`: `phone` (PK), `name`, `dietary_preference` ('None', 'Jain', 'Halal', 'Veg'), `total_orders`, `created_at`.
+2. `customer_addresses`: `id` (PK), `phone`, `label` ('Home'/'Office'/'Other'), `spoken_address`, `landmark`, `formatted_address`, `latitude`, `longitude`, `is_default`.
+3. `call_recordings`: `id` (PK), `call_id`, `call_sid`, `audio_path`, `duration_seconds`, `dispute_status`.
+4. `scheduled_orders`: `id` (PK), `order_id`, `scheduled_for`, `status` ('scheduled', 'triggered', 'cancelled').
+
+Add query helpers:
+- `getSavedAddresses(phone)`
+- `saveCustomerAddress(data)`
+- `getCustomerProfile(phone)`
+- `upsertCustomerProfile(profile)`
+- `getLastOrderForPhone(phone)`
+- `saveCallRecording(data)`
+
+---
+
+### Step 2: Location, Landmark Geocoding & Fallback Web Pin Drop
+#### [NEW] [geocodingService.js](file:///c:/Users/midun/OneDrive/Desktop/Inkiro/server/src/services/geocodingService.js)
+- `geocodeSpokenAddress(spokenAddress, landmark, city)`: Google Maps Geocoding API with high-precision landmark parsing and fallback coordinates.
+- Generates a short-lived `/pin/:orderId` web link when geocoding confidence is approximate.
+
+#### [NEW] [pinDropServer.js / Public Route in server.js](file:///c:/Users/midun/OneDrive/Desktop/Inkiro/server/server.js)
+- Lightweight HTML/JS mobile map page where customers can tap once to confirm/adjust their exact GPS pin.
+
+---
+
+### Step 3: WhatsApp Receipt & Messaging Engine
+#### [NEW] [whatsappService.js](file:///c:/Users/midun/OneDrive/Desktop/Inkiro/server/src/services/whatsappService.js)
+- Delivers an itemized visual receipt via Twilio WhatsApp API with:
+  - Dish names, quantities, and sub-totals
+  - Delivery address & landmark
+  - Live rider tracking link
+  - One-tap `"🔁 Reorder in 1 Click"` button
+
+---
+
+### Step 4: Missed-Call & DTMF Quick-Reorder Engine
+#### [NEW] [missedCallService.js](file:///c:/Users/midun/OneDrive/Desktop/Inkiro/server/src/services/missedCallService.js)
+- Webhook `POST /api/missed-call` that immediately initiates a Twilio outbound call back to the customer.
+- DTMF webhook `POST /api/telephony/dtmf` to handle `"Press 1 to reorder"` fast-path.
+
+---
+
+### Step 5: Advanced AI Dialogue Engine Upgrades
+#### [MODIFY] [dialogueManager.js](file:///c:/Users/midun/OneDrive/Desktop/Inkiro/server/src/services/dialogueManager.js)
+Enhance both Gemini Flash system prompts and the rule engine fallback with:
+1. **Returning Caller Fast-Path**: Recognize caller ID and offer 5-second reorder (*"Vanakkam! Same 1x Biryani to Gandhinagar near Senthil Hospital?"*).
+2. **Landmark Prompting Rule**: Naturally ask for nearby landmarks when an unverified address is spoken.
+3. **Dietary Safeguards**: Cross-check items against caller's dietary profile (e.g., alert if a Jain customer orders an item with onion/garlic).
+4. **Group Order Sub-Carts**: Extract line items tagged by person name (`items: [{ name: "Biryani", person: "Karthik" }]`).
+5. **Scheduled Orders**: Detect expressions like *"deliver at 8:30 PM tonight"* or *"tomorrow lunch"*.
+6. **Audio-Menu Discovery**: Recommend daily specials when caller asks *"Enna specials irukku?"*.
+
+---
+
+### Step 6: Audio Stream Persistence & Dispute Resolution API
+#### [MODIFY] [server.js](file:///c:/Users/midun/OneDrive/Desktop/Inkiro/server/server.js)
+- Stream and persist raw inbound audio packets into `./recordings/call_<id>.wav`.
+- Expose `GET /api/calls/:id/audio` to stream audio directly into the kitchen dashboard.
+- Link audio recordings and full transcripts to each order ticket.
+
+---
+
+### Step 7: Operations Dashboard Superpowers
+#### [MODIFY] [OrdersKDS.jsx](file:///c:/Users/midun/OneDrive/Desktop/Inkiro/client/src/components/OrdersKDS.jsx)
+- **Audio Dispute Player**: Interactive waveform/audio playback button on each order ticket.
+- **Group Order Breakdown**: Visual tags showing which item belongs to which person.
+- **Scheduled Order Badges**: Highlights future delivery time slots.
+
+#### [MODIFY] [VoiceSimulator.jsx](file:///c:/Users/midun/OneDrive/Desktop/Inkiro/client/src/components/VoiceSimulator.jsx)
+- **Simulation Shortcuts**: Quick buttons for "Repeat Last Order", "Group Order Mode", "Dietary Profile (Jain/Halal)", and "DTMF Key 1".
+
+#### [MODIFY] [CatalogManager.jsx](file:///c:/Users/midun/OneDrive/Desktop/Inkiro/client/src/components/CatalogManager.jsx)
+- **Special / Promoted Item Toggle**: Set daily featured dishes for audio discovery.
+- **Dietary Tags Manager**: Mark items as Veg, Non-Veg, Jain-friendly, or Halal.
+
+#### [NEW] [VoiceAnalytics.jsx](file:///c:/Users/midun/OneDrive/Desktop/Inkiro/client/src/components/VoiceAnalytics.jsx)
+- Dedicated analytics view displaying peak ordering hours, call completion rates, drop-off points, and average call duration.
+
+---
+
+## 🧪 Verification Plan
+
+### Automated Verification
+1. Verify SQLite schema migrations for `customer_profiles`, `customer_addresses`, and `scheduled_orders`.
+2. Run microservice unit tests for `geocodingService.js` and `whatsappService.js`.
+
+### Manual Verification
+1. **Instant Reorder & DTMF Test**: Simulate repeat call via web simulator and verify 5-second confirmation.
+2. **Landmark & Geocoding Test**: Provide address + landmark and verify exact lat/lng coordinates in DB.
+3. **Group Order & Dietary Test**: Test multi-person order and dietary warnings.
+4. **Dispute Audio Replay**: Play recorded audio on KDS ticket.
