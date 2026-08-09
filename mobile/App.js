@@ -49,17 +49,24 @@ export default function App() {
     })();
   }, []);
 
-  // ── Start Call ──
+  // ── Start Call with Auto-Wakeup & Retry ──
   async function startCall() {
     try {
       setCallState('connecting');
       setTranscript([{ speaker: 'ai', text: 'Connecting to VoiceCart AI Assistant...' }]);
 
-      // Wake up Render server if using production URL
-      if (serverUrl.includes('onrender.com')) {
-        fetch('https://voicecartai.onrender.com/api/stats').catch(() => {});
+      // Ping HTTP server first to wake up Render or test Local Wi-Fi
+      const httpUrl = serverUrl.includes('onrender.com')
+        ? 'https://voicecartai.onrender.com/api/stats'
+        : 'http://10.195.48.140:3001/api/stats';
+
+      try {
+        await fetch(httpUrl, { method: 'GET' });
+      } catch (e) {
+        console.log('[Wakeup Ping] Server ping warming up...');
       }
 
+      // Establish WebSocket Connection
       const ws = new WebSocket(serverUrl);
 
       ws.onopen = () => {
@@ -103,7 +110,10 @@ export default function App() {
 
       ws.onerror = (err) => {
         console.error('[WS Error]', err);
-        Alert.alert('Connection Error', 'Could not connect to AI backend. Ensure server is awake.');
+        Alert.alert(
+          'Connection Notice',
+          'Backend is warming up or unreachable. If using Local Wi-Fi, ensure laptop server is running.'
+        );
         setCallState('idle');
       };
 
@@ -145,7 +155,7 @@ export default function App() {
               })
             );
 
-            setTranscript((prev) => [...prev, { speaker: 'user', text: '🎙️ [Spoken Audio Sent]' }]);
+            setTranscript((prev) => [...prev, { speaker: 'user', text: '🎙️ [Voice Audio Sent]' }]);
           }
         }
       } catch (err) {
@@ -225,7 +235,7 @@ export default function App() {
           onPress={() => setServerUrl(LOCAL_WIFI_SERVER)}
           disabled={callState !== 'idle'}
         >
-          <Text style={styles.presetText}>📶 Local Wi-Fi</Text>
+          <Text style={styles.presetText}>📶 Local Wi-Fi (Laptop)</Text>
         </TouchableOpacity>
       </View>
 
@@ -261,7 +271,7 @@ export default function App() {
               {callState === 'active'
                 ? 'End Call'
                 : callState === 'connecting'
-                ? 'Connecting...'
+                ? 'Warming up & Connecting...'
                 : 'Start Voice Order Call'}
             </Text>
           </TouchableOpacity>
