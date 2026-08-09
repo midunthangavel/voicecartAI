@@ -254,14 +254,6 @@ export default function VoiceSimulator({ wsRef }) {
       window.speechSynthesis.speak(utterance);
     }
   }
-          setWaveformBars(Array(32).fill(4));
-        }
-      };
-      animate();
-    } catch (err) {
-      console.error('[Audio] Playback error:', err);
-    }
-  }
 
   const latencyColor = (ms) => ms < 500 ? 'good' : ms < 1000 ? 'okay' : 'slow';
 
