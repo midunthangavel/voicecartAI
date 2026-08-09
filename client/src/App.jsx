@@ -1,14 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Phone, ShoppingBag, IndianRupee, Zap, Activity, TrendingUp } from 'lucide-react';
+import { Phone, ShoppingBag, IndianRupee, Zap, Activity, TrendingUp, Smartphone } from 'lucide-react';
 import Sidebar from './components/Sidebar.jsx';
 import VoiceSimulator from './components/VoiceSimulator.jsx';
 import LiveCallMonitor from './components/LiveCallMonitor.jsx';
 import OrderDispatch from './components/OrderDispatch.jsx';
 import CatalogManager from './components/CatalogManager.jsx';
 import VoiceAnalytics from './components/VoiceAnalytics.jsx';
+import MobileCallView from './components/MobileCallView.jsx';
 
 export default function App() {
-  const [activeView, setActiveView] = useState('simulator');
+  const isCallRoute = window.location.pathname === '/call' || window.location.search.includes('mode=call');
+  const [activeView, setActiveView] = useState(isCallRoute ? 'mobile-call' : 'simulator');
   const [theme, setTheme] = useState(() => localStorage.getItem('voicecart_theme') || 'dark');
   const [stats, setStats] = useState({
     total_calls: 0, active_calls: 0, total_orders: 0,
@@ -54,7 +56,6 @@ export default function App() {
       const ws = new WebSocket(`${protocol}//${window.location.host}/dashboard-ws`);
 
       ws.onopen = () => {
-        console.log('[Dashboard WS] Connected');
         setServerStatus('online');
       };
 
@@ -76,7 +77,6 @@ export default function App() {
       };
 
       ws.onclose = () => {
-        console.log('[Dashboard WS] Disconnected, reconnecting in 3s...');
         setTimeout(connect, 3000);
       };
 
@@ -87,6 +87,11 @@ export default function App() {
     connect();
     return () => dashboardWs.current?.close();
   }, []);
+
+  // ── Render Mobile Full Screen Call Mode if on /call or mobile view ──
+  if (activeView === 'mobile-call' || isCallRoute) {
+    return <MobileCallView />;
+  }
 
   const statCards = [
     { label: 'Total Calls', value: stats.total_calls, color: 'violet', icon: Phone },
@@ -125,11 +130,26 @@ export default function App() {
         {/* ── Active View ── */}
         {activeView === 'simulator' && (
           <>
-            <div className="page-header">
+            <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
                 <h2 className="page-title">Voice Simulator & Inspector</h2>
                 <p className="page-subtitle">Test voice ordering directly in your browser — type or speak, see STT → Dialogue → TTS in real time</p>
               </div>
+
+              <a
+                href="/call"
+                target="_blank"
+                rel="noreferrer"
+                style={{
+                  padding: '10px 18px', borderRadius: '12px',
+                  background: 'linear-gradient(135deg, #10b981, #059669)',
+                  color: '#fff', textDecoration: 'none', fontWeight: 600,
+                  fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '8px',
+                  boxShadow: '0 4px 14px rgba(16, 185, 129, 0.3)'
+                }}
+              >
+                <Smartphone size={16} /> Mobile Free Call PWA (/call)
+              </a>
             </div>
             <VoiceSimulator />
           </>
