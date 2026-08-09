@@ -45,13 +45,21 @@ export default function VoiceSimulator({ wsRef }) {
   const startCall = useCallback(async () => {
     try {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/web-stream`;
+      const isLocal = ['localhost', '127.0.0.1'].includes(window.location.hostname) || window.location.hostname.startsWith('10.');
+      const backendHost = isLocal ? window.location.host : 'voicecartai.onrender.com';
+      const apiHost = isLocal ? `http://${window.location.host}` : 'https://voicecartai.onrender.com';
+
+      // Wake up Render server
+      fetch(`${apiHost}/api/stats`).catch(() => {});
+
+      const wsUrl = `${protocol}//${backendHost}/web-stream`;
       const ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
         console.log('[WS] Connected to voice stream');
         setIsConnected(true);
         wsConnection.current = ws;
+        ws.send(JSON.stringify({ type: 'start' }));
       };
 
       ws.onmessage = (event) => {
@@ -72,9 +80,15 @@ export default function VoiceSimulator({ wsRef }) {
               setLatencies(prev => ({ ...prev, dialogue: msg.latency_ms }));
             }
 
-            // Play audio response
+            // Play audio response (via base64 or native SpeechSynthesis fallback)
             if (msg.audio) {
-              playMulawAudio(msg.audio);
+              playMulawAudio(msg.audio, msg.text);
+            } else if (msg.text && 'speechSynthesis' in window) {
+              window.speechSynthesis.cancel();
+              const utterance = new SpeechSynthesisUtterance(msg.text);
+              utterance.lang = 'en-IN';
+              utterance.rate = 0.95;
+              window.speechSynthesis.speak(utterance);
             }
           }
         } catch (err) {
@@ -186,38 +200,60 @@ export default function VoiceSimulator({ wsRef }) {
   }, [textInput]);
 
   // ── Audio playback ──
-  function playMulawAudio(base64Audio) {
+  async function playMulawAudio(base64Audio, textFallback = '') {
     try {
-      const binary = atob(base64Audio);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      if (base64Audio) {
+        const binary = atob(base64Audio);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
 
-      // Decode mulaw to PCM
-      const pcmSamples = new Float32Array(bytes.length);
-      for (let i = 0; i < bytes.length; i++) {
-        pcmSamples[i] = mulawDecode(bytes[i]) / 32768.0;
+        const pcmSamples = new Float32Array(bytes.length);
+        for (let i = 0; i < bytes.length; i++) {
+          pcmSamples[i] = mulawDecode(bytes[i]) / 32768.0;
+        }
+
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        if (ctx.state === 'suspended') {
+          await ctx.resume();
+        }
+
+        const buffer = ctx.createBuffer(1, pcmSamples.length, 8000);
+        buffer.getChannelData(0).set(pcmSamples);
+        const src = ctx.createBufferSource();
+        src.buffer = buffer;
+        src.connect(ctx.destination);
+        src.start();
+
+        // AI waveform animation
+        const duration = pcmSamples.length / 8000;
+        const startTime = Date.now();
+        const animate = () => {
+          const elapsed = (Date.now() - startTime) / 1000;
+          if (elapsed < duration) {
+            const bars = Array(32).fill(0).map((_, i) =>
+              Math.max(4, Math.sin(elapsed * 8 + i * 0.5) * 28 + 20 + Math.random() * 8)
+            );
+            setWaveformBars(bars);
+            requestAnimationFrame(animate);
+          } else {
+            setWaveformBars(Array(32).fill(4));
+          }
+        };
+        requestAnimationFrame(animate);
+        return;
       }
+    } catch (err) {
+      console.warn('Audio playback error, falling back to SpeechSynthesis:', err.message);
+    }
 
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      const buffer = ctx.createBuffer(1, pcmSamples.length, 8000);
-      buffer.getChannelData(0).set(pcmSamples);
-      const src = ctx.createBufferSource();
-      src.buffer = buffer;
-      src.connect(ctx.destination);
-      src.start();
-
-      // AI waveform animation
-      const duration = pcmSamples.length / 8000;
-      const startTime = Date.now();
-      const animate = () => {
-        const elapsed = (Date.now() - startTime) / 1000;
-        if (elapsed < duration) {
-          const bars = Array(32).fill(0).map((_, i) =>
-            Math.max(4, Math.sin(elapsed * 8 + i * 0.5) * 28 + 20 + Math.random() * 8)
-          );
-          setWaveformBars(bars);
-          requestAnimationFrame(animate);
-        } else {
+    if (textFallback && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(textFallback);
+      utterance.lang = 'en-IN';
+      utterance.rate = 0.95;
+      window.speechSynthesis.speak(utterance);
+    }
+  }
           setWaveformBars(Array(32).fill(4));
         }
       };

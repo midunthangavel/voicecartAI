@@ -81,9 +81,9 @@ export default function MobileCallView() {
                 address: msg.state.delivery_address || 'Coimbatore',
               });
             }
-            if (msg.audio) {
+            if (msg.audio || msg.text) {
               setAiSpeaking(true);
-              await playAudioPayload(msg.audio);
+              await playAudioPayload(msg.audio, msg.text);
               setAiSpeaking(false);
             }
           } else if (msg.type === 'transcript') {
@@ -135,22 +135,41 @@ export default function MobileCallView() {
     }
   }
 
-  async function playAudioPayload(base64Payload) {
+  async function playAudioPayload(base64Payload, textFallback = '') {
     try {
-      const binary = atob(base64Payload);
-      const len = binary.length;
-      const bytes = new Uint8Array(len);
-      for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+      if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+        await audioCtxRef.current.resume();
+      }
 
-      const audioBuffer = await audioCtxRef.current.decodeAudioData(bytes.buffer);
-      const source = audioCtxRef.current.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(audioCtxRef.current.destination);
-      source.start(0);
+      if (base64Payload) {
+        const binary = atob(base64Payload);
+        const len = binary.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
 
-      await new Promise(resolve => { source.onended = resolve; });
+        try {
+          const audioBuffer = await audioCtxRef.current.decodeAudioData(bytes.buffer);
+          const source = audioCtxRef.current.createBufferSource();
+          source.buffer = audioBuffer;
+          source.connect(audioCtxRef.current.destination);
+          source.start(0);
+          await new Promise(resolve => { source.onended = resolve; });
+          return;
+        } catch (e) {
+          console.warn('[Audio] WebAudio decode failed, falling back to SpeechSynthesis:', e.message);
+        }
+      }
+
+      // Fallback: Native Browser TTS (Works 100% on iOS Safari & Android Chrome)
+      if (textFallback && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(textFallback);
+        utterance.lang = 'en-IN';
+        utterance.rate = 0.95;
+        window.speechSynthesis.speak(utterance);
+      }
     } catch (e) {
-      console.warn('Audio playback decode error:', e);
+      console.warn('Audio playback error:', e);
     }
   }
 
