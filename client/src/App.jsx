@@ -35,9 +35,12 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
+  const isLocal = ['localhost', '127.0.0.1'].includes(window.location.hostname) || window.location.hostname.startsWith('10.');
+  const apiBase = isLocal ? '' : 'https://voicecartai.onrender.com';
+
   async function fetchStats() {
     try {
-      const res = await fetch('/api/stats');
+      const res = await fetch(`${apiBase}/api/stats`);
       if (res.ok) {
         setStats(await res.json());
         setServerStatus('online');
@@ -53,7 +56,8 @@ export default function App() {
   useEffect(() => {
     function connect() {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(`${protocol}//${window.location.host}/dashboard-ws`);
+      const wsHost = isLocal ? window.location.host : 'voicecartai.onrender.com';
+      const ws = new WebSocket(`${protocol}//${wsHost}/dashboard-ws`);
 
       ws.onopen = () => {
         setServerStatus('online');

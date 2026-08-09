@@ -43,7 +43,9 @@ export default function MobileCallView() {
       audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
 
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(`${protocol}//${window.location.host}/web-stream`);
+      const isLocal = ['localhost', '127.0.0.1'].includes(window.location.hostname) || window.location.hostname.startsWith('10.');
+      const backendHost = isLocal ? window.location.host : 'voicecartai.onrender.com';
+      const ws = new WebSocket(`${protocol}//${backendHost}/web-stream`);
 
       ws.onopen = () => {
         setCallState('connected');
