@@ -36,15 +36,22 @@ export default function MobileCallView() {
   // ── Start Call ──
   async function startCall() {
     setCallState('calling');
-    setTranscript([{ speaker: 'ai', text: 'Connecting to VoiceCart AI server...' }]);
+    setTranscript([{ speaker: 'ai', text: 'Requesting microphone permission...' }]);
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
 
+      setTranscript([{ speaker: 'ai', text: 'Connecting to VoiceCart AI server (wss://voicecartai.onrender.com)...' }]);
+
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const isLocal = ['localhost', '127.0.0.1'].includes(window.location.hostname) || window.location.hostname.startsWith('10.');
       const backendHost = isLocal ? window.location.host : 'voicecartai.onrender.com';
+      const apiHost = isLocal ? `http://${window.location.host}` : 'https://voicecartai.onrender.com';
+
+      // Wake up Render server if sleeping
+      fetch(`${apiHost}/api/stats`).catch(() => {});
+
       const ws = new WebSocket(`${protocol}//${backendHost}/web-stream`);
 
       ws.onopen = () => {
@@ -52,11 +59,34 @@ export default function MobileCallView() {
         ws.send(JSON.stringify({ type: 'start' }));
       };
 
+      ws.onerror = (err) => {
+        console.error('[WebStream] WebSocket error:', err);
+        setTranscript(prev => [...prev, { speaker: 'ai', text: 'Connection error. Retrying server wakeup...' }]);
+      };
+
       ws.onmessage = async (event) => {
         try {
           const msg = JSON.parse(event.data);
 
-          if (msg.type === 'transcript') {
+          if (msg.type === 'ai_response') {
+            setTranscript(prev => [...prev, { speaker: 'ai', text: msg.text }]);
+            if (msg.state?.items) {
+              setCurrentCart(msg.state.items);
+              setTotalAmount(msg.state.total || 0);
+            }
+            if (msg.state?.status === 'confirmed') {
+              setConfirmedOrder({
+                order_id: 'ORD-' + Math.floor(1000 + Math.random() * 9000),
+                total: msg.state.total || 0,
+                address: msg.state.delivery_address || 'Coimbatore',
+              });
+            }
+            if (msg.audio) {
+              setAiSpeaking(true);
+              await playAudioPayload(msg.audio);
+              setAiSpeaking(false);
+            }
+          } else if (msg.type === 'transcript') {
             setTranscript(prev => [...prev, { speaker: msg.speaker, text: msg.text }]);
           } else if (msg.type === 'order_update' || msg.event === 'order_update') {
             setCurrentCart(msg.items || []);
