@@ -3,7 +3,6 @@ import { Mic, MonitorSpeaker, ShoppingBag, BookOpen, BarChart3, Zap, Sun, Moon, 
 
 const navItems = [
   { id: 'simulator', label: 'Voice Simulator', icon: Mic },
-  { id: 'mobile-call', label: 'Mobile Free Call', icon: Smartphone },
   { id: 'calls', label: 'Live Calls', icon: MonitorSpeaker },
   { id: 'orders', label: 'Orders & KDS', icon: ShoppingBag },
   { id: 'catalog', label: 'Catalog & Hints', icon: BookOpen },

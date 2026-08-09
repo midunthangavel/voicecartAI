@@ -9,8 +9,7 @@ import VoiceAnalytics from './components/VoiceAnalytics.jsx';
 import MobileCallView from './components/MobileCallView.jsx';
 
 export default function App() {
-  const isCallRoute = window.location.pathname === '/call' || window.location.search.includes('mode=call');
-  const [activeView, setActiveView] = useState(isCallRoute ? 'mobile-call' : 'simulator');
+  const [activeView, setActiveView] = useState('simulator');
   const [theme, setTheme] = useState(() => localStorage.getItem('voicecart_theme') || 'dark');
   const [stats, setStats] = useState({
     total_calls: 0, active_calls: 0, total_orders: 0,
