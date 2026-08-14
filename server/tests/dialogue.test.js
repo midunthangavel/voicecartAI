@@ -1,7 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { processDialogueTurn, getInitialState } from '../src/services/dialogueManager.js';
-import { upsertCustomerProfile } from '../src/db.js';
+import { initDatabase, upsertCustomerProfile } from '../src/db.js';
+import { unlinkSync, existsSync } from 'fs';
+import { resolve } from 'path';
+
+const TEST_DB = resolve('./test_dialogue.db');
+
+test.before(async () => {
+  if (existsSync(TEST_DB)) unlinkSync(TEST_DB);
+  process.env.DB_PATH = TEST_DB;
+  await initDatabase();
+});
+
+test.after(() => {
+  try { if (existsSync(TEST_DB)) unlinkSync(TEST_DB); } catch {}
+});
 
 test('Dialogue Engine: Greeting State', async () => {
   const state = getInitialState();
@@ -62,8 +76,9 @@ test('Dialogue Engine: Group Order Sub-Cart Tagging', async () => {
 test('Dialogue Engine: Order Confirmation Step', async () => {
   const state = getInitialState();
   state.items = [{ name: 'Butter Naan', price: 45, quantity: 2 }];
+  state.delivery_address = '42 DB Road, RS Puram';
   state.total = 90;
-  state.status = 'confirming';
+  state.status = 'awaiting_confirmation';
 
   const res = await processDialogueTurn('Yes confirm the order', state);
   assert.ok(res.updated_state.status === 'confirmed' || res.response_text.toLowerCase().includes('confirm'));

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Phone, ShoppingBag, IndianRupee, Zap, Activity, TrendingUp, Smartphone } from 'lucide-react';
 import Sidebar from './components/Sidebar.jsx';
 import VoiceSimulator from './components/VoiceSimulator.jsx';
@@ -7,17 +7,13 @@ import OrderDispatch from './components/OrderDispatch.jsx';
 import CatalogManager from './components/CatalogManager.jsx';
 import VoiceAnalytics from './components/VoiceAnalytics.jsx';
 import MobileCallView from './components/MobileCallView.jsx';
+import { useDashboardWs } from './hooks/useDashboardWs.js';
 
 export default function App() {
   const [activeView, setActiveView] = useState('simulator');
   const [theme, setTheme] = useState(() => localStorage.getItem('voicecart_theme') || 'dark');
-  const [stats, setStats] = useState({
-    total_calls: 0, active_calls: 0, total_orders: 0,
-    confirmed_orders: 0, revenue: 0, avg_latency_ms: 0,
-  });
-  const [serverStatus, setServerStatus] = useState('offline');
-  const [realtimeEvents, setRealtimeEvents] = useState([]);
-  const dashboardWs = useRef(null);
+
+  const { serverStatus, events, stats } = useDashboardWs();
 
   // ── Sync theme with html root ──
   useEffect(() => {
@@ -27,69 +23,7 @@ export default function App() {
 
   const toggleTheme = () => setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
 
-  // ── Fetch stats ──
-  useEffect(() => {
-    fetchStats();
-    const interval = setInterval(fetchStats, 4000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const isLocal = ['localhost', '127.0.0.1'].includes(window.location.hostname) || window.location.hostname.startsWith('10.');
-  const apiBase = isLocal ? '' : 'https://voicecartai.onrender.com';
-
-  async function fetchStats() {
-    try {
-      const res = await fetch(`${apiBase}/api/stats`);
-      if (res.ok) {
-        setStats(await res.json());
-        setServerStatus('online');
-      } else {
-        setServerStatus('offline');
-      }
-    } catch {
-      setServerStatus('offline');
-    }
-  }
-
-  // ── Dashboard WebSocket for real-time events ──
-  useEffect(() => {
-    function connect() {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsHost = isLocal ? window.location.host : 'voicecartai.onrender.com';
-      const ws = new WebSocket(`${protocol}//${wsHost}/dashboard-ws`);
-
-      ws.onopen = () => {
-        setServerStatus('online');
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          setRealtimeEvents(prev => [msg, ...prev].slice(0, 50));
-
-          if (['order_confirmed', 'call_started', 'call_ended'].includes(msg.type)) {
-            fetchStats();
-          }
-
-          if (msg.type === 'call_started') {
-            setStats(prev => ({ ...prev, active_calls: prev.active_calls + 1 }));
-          } else if (msg.type === 'call_ended') {
-            setStats(prev => ({ ...prev, active_calls: Math.max(0, prev.active_calls - 1) }));
-          }
-        } catch {}
-      };
-
-      ws.onclose = () => {
-        setTimeout(connect, 3000);
-      };
-
-      ws.onerror = () => ws.close();
-      dashboardWs.current = ws;
-    }
-
-    connect();
-    return () => dashboardWs.current?.close();
-  }, []);
+  const isCallRoute = typeof window !== 'undefined' && window.location.pathname.startsWith('/call');
 
   // ── Render Mobile Full Screen Call Mode if on /call or mobile view ──
   if (activeView === 'mobile-call' || isCallRoute) {
@@ -97,16 +31,17 @@ export default function App() {
   }
 
   const statCards = [
-    { label: 'Total Calls', value: stats.total_calls, color: 'violet', icon: Phone },
-    { label: 'Active Now', value: stats.active_calls, color: 'emerald', icon: Activity },
-    { label: 'Orders', value: stats.confirmed_orders, color: 'cyan', icon: ShoppingBag },
-    { label: 'Revenue', value: `₹${stats.revenue.toLocaleString('en-IN')}`, color: 'amber', icon: IndianRupee },
-    { label: 'Avg Latency', value: `${stats.avg_latency_ms}ms`, color: stats.avg_latency_ms < 500 ? 'emerald' : stats.avg_latency_ms < 1000 ? 'amber' : 'rose', icon: Zap },
-    { label: 'Conversion', value: stats.total_calls > 0 ? `${Math.round((stats.confirmed_orders / stats.total_calls) * 100)}%` : '—', color: 'blue', icon: TrendingUp },
+    { label: 'Total Inbound Calls', value: stats.total_calls, color: 'violet', icon: Phone },
+    { label: 'Active Live Calls', value: stats.active_calls, color: 'emerald', icon: Activity, isLive: stats.active_calls > 0 },
+    { label: 'Orders Placed', value: stats.total_orders, color: 'cyan', icon: ShoppingBag },
+    { label: 'Confirmed & Paid', value: stats.confirmed_orders, color: 'emerald', icon: TrendingUp },
+    { label: 'Revenue Generated', value: `₹${(stats.revenue || 0).toLocaleString('en-IN')}`, color: 'amber', icon: IndianRupee },
+    { label: 'Avg Turn Latency', value: `${stats.avg_latency_ms || 0}ms`, color: 'rose', icon: Zap },
   ];
 
   return (
     <div className="app-layout">
+      {/* Sidebar Navigation */}
       <Sidebar
         activeView={activeView}
         onNavigate={setActiveView}
@@ -116,50 +51,57 @@ export default function App() {
         onToggleTheme={toggleTheme}
       />
 
+      {/* Main Content Area */}
       <main className="main-content">
-        {/* ── Stats Bar (always visible) ── */}
-        <div className="stats-grid">
-          {statCards.map((stat, i) => (
-            <div key={i} className={`stat-card ${stat.color}`}>
-              <div className={`stat-icon ${stat.color}`}>
-                <stat.icon size={18} />
-              </div>
-              <div className="stat-value">{stat.value}</div>
-              <div className="stat-label">{stat.label}</div>
-            </div>
-          ))}
+        {/* Top Header Bar */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+          <div>
+            <h1 style={{ fontSize: '1.25rem', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              🍛 Sree Annapoorna <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: 400 }}>· RS Puram, Coimbatore</span>
+            </h1>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+              AI Voice Ordering Engine · Exotel / WhatsApp / ONDC Integration
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => setActiveView('mobile-call')}
+              style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem', borderColor: 'var(--accent-violet)', color: 'var(--accent-violet)' }}
+            >
+              <Smartphone size={14} /> Open Mobile View
+            </button>
+          </div>
         </div>
 
-        {/* ── Active View ── */}
-        {activeView === 'simulator' && (
-          <>
-            <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <h2 className="page-title">Voice Simulator & Inspector</h2>
-                <p className="page-subtitle">Test voice ordering directly in your browser — type or speak, see STT → Dialogue → TTS in real time</p>
+        {/* Top Metrics Cards Bar */}
+        <div className="stats-grid" style={{ marginBottom: '24px' }}>
+          {statCards.map((stat, i) => {
+            const Icon = stat.icon;
+            return (
+              <div key={i} className="stat-card">
+                <div className="stat-card-header">
+                  <span className="stat-label">{stat.label}</span>
+                  <div className={`stat-icon-wrapper ${stat.color}`}>
+                    <Icon size={16} />
+                  </div>
+                </div>
+                <div className="stat-value" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  {stat.value}
+                  {stat.isLive && (
+                    <span className="status-dot live" style={{ width: 8, height: 8 }} />
+                  )}
+                </div>
               </div>
+            );
+          })}
+        </div>
 
-              <a
-                href="/call"
-                target="_blank"
-                rel="noreferrer"
-                style={{
-                  padding: '10px 18px', borderRadius: '12px',
-                  background: 'linear-gradient(135deg, #10b981, #059669)',
-                  color: '#fff', textDecoration: 'none', fontWeight: 600,
-                  fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '8px',
-                  boxShadow: '0 4px 14px rgba(16, 185, 129, 0.3)'
-                }}
-              >
-                <Smartphone size={16} /> Mobile Free Call PWA (/call)
-              </a>
-            </div>
-            <VoiceSimulator />
-          </>
-        )}
-
+        {/* View Switcher */}
+        {activeView === 'simulator' && <VoiceSimulator />}
         {activeView === 'calls' && <LiveCallMonitor />}
-        {activeView === 'orders' && <OrderDispatch />}
+        {activeView === 'orders' && <OrderDispatch events={events} />}
         {activeView === 'catalog' && <CatalogManager />}
         {activeView === 'analytics' && <VoiceAnalytics />}
       </main>

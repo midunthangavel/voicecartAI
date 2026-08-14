@@ -1,22 +1,24 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Phone, PhoneOff, Send, Mic, MicOff, Volume2 } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Phone, PhoneOff, Send, Mic, MicOff, Volume2, Zap } from 'lucide-react';
+import { useVoiceSimulator } from '../hooks/useVoiceSimulator.js';
 
-export default function VoiceSimulator({ wsRef }) {
-  const [isConnected, setIsConnected] = useState(false);
-  const [isMicActive, setIsMicActive] = useState(false);
-  const [transcript, setTranscript] = useState([]);
-  const [interimText, setInterimText] = useState('');
-  const [sessionState, setSessionState] = useState(null);
+export default function VoiceSimulator() {
+  const {
+    isConnected,
+    isMicActive,
+    transcript,
+    interimText,
+    sessionState,
+    callDuration,
+    latencies,
+    waveformBars,
+    startCall,
+    endCall,
+    toggleMicrophone,
+    sendTextMessage,
+  } = useVoiceSimulator();
+
   const [textInput, setTextInput] = useState('');
-  const [callDuration, setCallDuration] = useState(0);
-  const [latencies, setLatencies] = useState({ stt: 0, dialogue: 0, tts: 0 });
-  const [waveformBars, setWaveformBars] = useState(Array(32).fill(4));
-
-  const wsConnection = useRef(null);
-  const audioContextRef = useRef(null);
-  const mediaStreamRef = useRef(null);
-  const processorRef = useRef(null);
-  const timerRef = useRef(null);
   const transcriptEndRef = useRef(null);
 
   // Auto-scroll transcript
@@ -24,238 +26,19 @@ export default function VoiceSimulator({ wsRef }) {
     transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [transcript, interimText]);
 
-  // Call timer
-  useEffect(() => {
-    if (isConnected) {
-      timerRef.current = setInterval(() => setCallDuration(d => d + 1), 1000);
-    } else {
-      clearInterval(timerRef.current);
-      setCallDuration(0);
-    }
-    return () => clearInterval(timerRef.current);
-  }, [isConnected]);
-
   const formatDuration = (secs) => {
     const m = Math.floor(secs / 60).toString().padStart(2, '0');
     const s = (secs % 60).toString().padStart(2, '0');
     return `${m}:${s}`;
   };
 
-  // ── Connect to voice WebSocket ──
-  const startCall = useCallback(async () => {
-    try {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const isLocal = ['localhost', '127.0.0.1'].includes(window.location.hostname) || window.location.hostname.startsWith('10.');
-      const backendHost = isLocal ? window.location.host : 'voicecartai.onrender.com';
-      const apiHost = isLocal ? `http://${window.location.host}` : 'https://voicecartai.onrender.com';
-
-      // Wake up Render server
-      fetch(`${apiHost}/api/stats`).catch(() => {});
-
-      const wsUrl = `${protocol}//${backendHost}/web-stream`;
-      const ws = new WebSocket(wsUrl);
-
-      ws.onopen = () => {
-        console.log('[WS] Connected to voice stream');
-        setIsConnected(true);
-        wsConnection.current = ws;
-        ws.send(JSON.stringify({ type: 'start' }));
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-
-          if (msg.type === 'stt_transcript') {
-            if (msg.isFinal) {
-              setTranscript(prev => [...prev, { role: 'user', text: msg.transcript }]);
-              setInterimText('');
-            } else {
-              setInterimText(msg.transcript);
-            }
-          } else if (msg.type === 'ai_response') {
-            setTranscript(prev => [...prev, { role: 'ai', text: msg.text }]);
-            setSessionState(msg.state);
-            if (msg.latency_ms) {
-              setLatencies(prev => ({ ...prev, dialogue: msg.latency_ms }));
-            }
-
-            // Play audio response (via base64 or native SpeechSynthesis fallback)
-            if (msg.audio) {
-              playMulawAudio(msg.audio, msg.text);
-            } else if (msg.text && 'speechSynthesis' in window) {
-              window.speechSynthesis.cancel();
-              const utterance = new SpeechSynthesisUtterance(msg.text);
-              utterance.lang = 'en-IN';
-              utterance.rate = 0.95;
-              window.speechSynthesis.speak(utterance);
-            }
-          }
-        } catch (err) {
-          console.error('[WS] Parse error:', err);
-        }
-      };
-
-      ws.onclose = () => {
-        console.log('[WS] Disconnected');
-        setIsConnected(false);
-        wsConnection.current = null;
-        stopMicrophone();
-      };
-
-      ws.onerror = (err) => {
-        console.error('[WS] Error:', err);
-      };
-    } catch (err) {
-      console.error('[Call] Failed to start:', err);
-    }
-  }, []);
-
-  const endCall = useCallback(() => {
-    if (wsConnection.current) {
-      wsConnection.current.send(JSON.stringify({ type: 'end' }));
-      wsConnection.current.close();
-    }
-    stopMicrophone();
-    setIsConnected(false);
-    setIsMicActive(false);
-  }, []);
-
-  // ── Microphone ──
-  const startMicrophone = useCallback(async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          sampleRate: 16000,
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        }
-      });
-      mediaStreamRef.current = stream;
-
-      const audioCtx = new (window.AudioContext || window.webkitAudioContext)({
-        sampleRate: 16000,
-      });
-      audioContextRef.current = audioCtx;
-
-      const source = audioCtx.createMediaStreamSource(stream);
-      const processor = audioCtx.createScriptProcessor(4096, 1, 1);
-      processorRef.current = processor;
-
-      // Waveform visualization + audio sending
-      const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 64;
-      const dataArray = new Uint8Array(analyser.frequencyBinCount);
-
-      source.connect(analyser);
-      analyser.connect(processor);
-      processor.connect(audioCtx.destination);
-
-      processor.onaudioprocess = (e) => {
-        // Send audio to server
-        if (wsConnection.current?.readyState === WebSocket.OPEN) {
-          const inputData = e.inputBuffer.getChannelData(0);
-          const pcm16 = float32ToPcm16(inputData);
-          const b64 = arrayBufferToBase64(pcm16.buffer);
-          wsConnection.current.send(JSON.stringify({ type: 'audio', data: b64 }));
-        }
-
-        // Update waveform
-        analyser.getByteFrequencyData(dataArray);
-        const bars = Array.from(dataArray).slice(0, 32).map(v => Math.max(4, (v / 255) * 56));
-        setWaveformBars(bars);
-      };
-
-      setIsMicActive(true);
-    } catch (err) {
-      console.error('[Mic] Error:', err);
-      alert('Microphone access denied. Please allow microphone access in your browser settings.');
-    }
-  }, []);
-
-  const stopMicrophone = useCallback(() => {
-    processorRef.current?.disconnect();
-    audioContextRef.current?.close();
-    mediaStreamRef.current?.getTracks().forEach(t => t.stop());
-    setIsMicActive(false);
-    setWaveformBars(Array(32).fill(4));
-  }, []);
-
-  const toggleMic = useCallback(() => {
-    if (isMicActive) {
-      stopMicrophone();
-    } else {
-      startMicrophone();
-    }
-  }, [isMicActive, startMicrophone, stopMicrophone]);
-
-  // ── Text input (testing without mic) ──
-  const sendTextMessage = useCallback(() => {
-    if (!textInput.trim() || !wsConnection.current) return;
-    wsConnection.current.send(JSON.stringify({ type: 'text', text: textInput.trim() }));
-    setTranscript(prev => [...prev, { role: 'user', text: textInput.trim() }]);
+  const handleSendText = () => {
+    if (!textInput.trim()) return;
+    sendTextMessage(textInput);
     setTextInput('');
-  }, [textInput]);
+  };
 
-  // ── Audio playback ──
-  async function playMulawAudio(base64Audio, textFallback = '') {
-    try {
-      if (base64Audio) {
-        const binary = atob(base64Audio);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-
-        const pcmSamples = new Float32Array(bytes.length);
-        for (let i = 0; i < bytes.length; i++) {
-          pcmSamples[i] = mulawDecode(bytes[i]) / 32768.0;
-        }
-
-        const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        if (ctx.state === 'suspended') {
-          await ctx.resume();
-        }
-
-        const buffer = ctx.createBuffer(1, pcmSamples.length, 8000);
-        buffer.getChannelData(0).set(pcmSamples);
-        const src = ctx.createBufferSource();
-        src.buffer = buffer;
-        src.connect(ctx.destination);
-        src.start();
-
-        // AI waveform animation
-        const duration = pcmSamples.length / 8000;
-        const startTime = Date.now();
-        const animate = () => {
-          const elapsed = (Date.now() - startTime) / 1000;
-          if (elapsed < duration) {
-            const bars = Array(32).fill(0).map((_, i) =>
-              Math.max(4, Math.sin(elapsed * 8 + i * 0.5) * 28 + 20 + Math.random() * 8)
-            );
-            setWaveformBars(bars);
-            requestAnimationFrame(animate);
-          } else {
-            setWaveformBars(Array(32).fill(4));
-          }
-        };
-        requestAnimationFrame(animate);
-        return;
-      }
-    } catch (err) {
-      console.warn('Audio playback error, falling back to SpeechSynthesis:', err.message);
-    }
-
-    if (textFallback && 'speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(textFallback);
-      utterance.lang = 'en-IN';
-      utterance.rate = 0.95;
-      window.speechSynthesis.speak(utterance);
-    }
-  }
-
-  const latencyColor = (ms) => ms < 500 ? 'good' : ms < 1000 ? 'okay' : 'slow';
+  const latencyColor = (ms) => (ms < 500 ? 'good' : ms < 1000 ? 'okay' : 'slow');
 
   return (
     <div className="voice-sim-container">
@@ -265,13 +48,21 @@ export default function VoiceSimulator({ wsRef }) {
           <div className="card-header">
             <span className="card-title">Voice Call Simulator</span>
             {isConnected && (
-              <div className="latency-meters">
+              <div className="latency-meters" style={{ display: 'flex', gap: '8px' }}>
                 <div className="latency-meter">
-                  <span className="latency-label">Dialogue</span>
+                  <span className="latency-label">Inference</span>
                   <span className={`latency-value ${latencyColor(latencies.dialogue)}`}>
                     {latencies.dialogue}ms
                   </span>
                 </div>
+                {latencies.total > 0 && (
+                  <div className="latency-meter">
+                    <span className="latency-label">Turn Total</span>
+                    <span className={`latency-value ${latencyColor(latencies.total)}`}>
+                      {latencies.total}ms
+                    </span>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -305,9 +96,9 @@ export default function VoiceSimulator({ wsRef }) {
           {/* Mic toggle */}
           {isConnected && (
             <div style={{ display: 'flex', justifyContent: 'center', gap: '12px', padding: '8px' }}>
-              <button className={`btn ${isMicActive ? 'btn-primary' : 'btn-ghost'}`} onClick={toggleMic}>
+              <button className={`btn ${isMicActive ? 'btn-primary' : 'btn-ghost'}`} onClick={toggleMicrophone}>
                 {isMicActive ? <MicOff size={16} /> : <Mic size={16} />}
-                {isMicActive ? 'Mute' : 'Unmute'}
+                {isMicActive ? 'Mute Mic' : 'Unmute Mic'}
               </button>
             </div>
           )}
@@ -318,7 +109,7 @@ export default function VoiceSimulator({ wsRef }) {
           <div className="card-header">
             <span className="card-title">Conversation</span>
             <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-              {transcript.length} messages
+              {transcript.length} turns
             </span>
           </div>
 
@@ -327,7 +118,7 @@ export default function VoiceSimulator({ wsRef }) {
               <div className="empty-state">
                 <Volume2 className="empty-state-icon" />
                 <h3>No active conversation</h3>
-                <p>Start a call to begin the voice ordering experience</p>
+                <p>Start a call to begin the bilingual Tamil/English voice ordering experience</p>
               </div>
             )}
 
@@ -352,26 +143,22 @@ export default function VoiceSimulator({ wsRef }) {
             <div ref={transcriptEndRef} />
           </div>
 
-          {/* Text input fallback + quick testing shortcuts */}
+          {/* Quick testing shortcuts + text input */}
           {isConnected && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '8px 0' }}>
               <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                 {[
-                  { label: '🔁 Repeat Last Order', text: 'Repeat my last order' },
-                  { label: '📍 Landmark Address', text: 'Deliver to 42 DB Road, near Senthil Hospital' },
-                  { label: '🧑‍🤝‍🧑 Group Order', text: 'Karthik wants 1 chicken biryani, Priya wants 1 paneer butter masala' },
-                  { label: '⭐ Today\'s Specials', text: 'What is special today?' },
-                  { label: '⏰ Schedule Order', text: 'Deliver at 8:30 PM tonight' },
+                  { label: '🍗 2 Chicken Biryani', text: 'I want 2 chicken biryani' },
+                  { label: '📍 DB Road RS Puram', text: 'Deliver to 42 DB Road, RS Puram' },
+                  { label: '✅ Yes Confirm', text: 'Yes confirm the order' },
+                  { label: '⭐ Specials Today', text: 'What is special today?' },
+                  { label: '🔁 Repeat Order', text: 'Repeat my last order' },
                 ].map((chip, idx) => (
                   <button
                     key={idx}
                     className="btn btn-ghost btn-sm"
                     style={{ fontSize: '0.68rem', padding: '3px 8px', borderRadius: '12px', background: 'var(--bg-input)' }}
-                    onClick={() => {
-                      if (!wsConnection.current) return;
-                      wsConnection.current.send(JSON.stringify({ type: 'text', text: chip.text }));
-                      setTranscript(prev => [...prev, { role: 'user', text: chip.text }]);
-                    }}
+                    onClick={() => sendTextMessage(chip.text)}
                   >
                     {chip.label}
                   </button>
@@ -382,10 +169,10 @@ export default function VoiceSimulator({ wsRef }) {
                   className="text-input"
                   value={textInput}
                   onChange={e => setTextInput(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && sendTextMessage()}
-                  placeholder="Type to test (e.g., 'I want one chicken biryani')"
+                  onKeyDown={e => e.key === 'Enter' && handleSendText()}
+                  placeholder="Type to test (e.g., 'I want 2 chicken biryani and 2 butter naan')"
                 />
-                <button className="btn btn-primary btn-sm" onClick={sendTextMessage}>
+                <button className="btn btn-primary btn-sm" onClick={handleSendText}>
                   <Send size={14} />
                 </button>
               </div>
@@ -398,7 +185,7 @@ export default function VoiceSimulator({ wsRef }) {
       <div className="voice-panel">
         <div className="card">
           <div className="card-header">
-            <span className="card-title">Order State</span>
+            <span className="card-title">Order State (Authoritative Cart)</span>
             {sessionState?.status && (
               <span className={`slot-status ${sessionState.status}`}>
                 {sessionState.status.replace('_', ' ')}
@@ -409,21 +196,21 @@ export default function VoiceSimulator({ wsRef }) {
           <div className="slot-state">
             {(!sessionState || sessionState.items?.length === 0) ? (
               <div className="empty-state" style={{ padding: '32px 10px' }}>
-                <h3>Waiting for items...</h3>
-                <p>Speak or type an order to see slot extraction in real time</p>
+                <h3>Waiting for food items...</h3>
+                <p>Speak or type an order to see deterministic pricing and slot extraction</p>
               </div>
             ) : (
               <>
                 {sessionState.items?.map((item, i) => (
                   <div className="slot-item" key={i}>
-                    <span className="slot-item-name">{item.quantity}× {item.name}</span>
-                    <span className="slot-item-detail">₹{(item.price || 0) * (item.quantity || 1)}</span>
+                    <span className="slot-item-name">{item.quantity}× {item.name || item.item_name_snapshot}</span>
+                    <span className="slot-item-detail">₹{(item.price || item.unit_price_snapshot || 0) * (item.quantity || 1)}</span>
                   </div>
                 ))}
 
                 {sessionState.total > 0 && (
                   <div className="slot-item" style={{ fontWeight: 700, marginTop: '8px', borderTop: '1px solid var(--border-subtle)', paddingTop: '12px' }}>
-                    <span>Total</span>
+                    <span>Total (incl. 5% GST)</span>
                     <span style={{ color: 'var(--accent-emerald)', fontSize: '1.1rem' }}>₹{sessionState.total}</span>
                   </div>
                 )}
@@ -442,7 +229,7 @@ export default function VoiceSimulator({ wsRef }) {
         {/* JSON Inspector */}
         <div className="card" style={{ flex: 1 }}>
           <div className="card-header">
-            <span className="card-title">Raw State JSON</span>
+            <span className="card-title">State Machine Inspector</span>
           </div>
           <pre style={{
             fontFamily: 'var(--font-mono)',
@@ -463,33 +250,4 @@ export default function VoiceSimulator({ wsRef }) {
       </div>
     </div>
   );
-}
-
-// ── Utility: Float32 → PCM16 ──
-function float32ToPcm16(float32Array) {
-  const pcm16 = new Int16Array(float32Array.length);
-  for (let i = 0; i < float32Array.length; i++) {
-    const s = Math.max(-1, Math.min(1, float32Array[i]));
-    pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-  }
-  return pcm16;
-}
-
-// ── Utility: ArrayBuffer → Base64 ──
-function arrayBufferToBase64(buffer) {
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary);
-}
-
-// ── Utility: Mu-law decode ──
-function mulawDecode(mulawByte) {
-  const BIAS = 0x84;
-  mulawByte = ~mulawByte;
-  const sign = (mulawByte & 0x80) ? -1 : 1;
-  const exponent = (mulawByte & 0x70) >> 4;
-  const mantissa = mulawByte & 0x0F;
-  let sample = (mantissa << (exponent + 3)) + (BIAS << exponent) - BIAS;
-  return sign * sample;
 }

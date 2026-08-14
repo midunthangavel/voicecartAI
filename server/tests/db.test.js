@@ -17,16 +17,16 @@ test.before(async () => {
 });
 
 test.after(() => {
-  if (existsSync(TEST_DB)) unlinkSync(TEST_DB);
+  try { if (existsSync(TEST_DB)) unlinkSync(TEST_DB); } catch {}
 });
 
 test('DB Layer: Table Initialization & Seeding', async () => {
-  const merchant = await dbGet('SELECT * FROM merchants LIMIT 1');
-  assert.ok(merchant, 'Merchant should be seeded');
-  assert.equal(merchant.name, 'Anbu Biryani House');
+  const restaurant = await dbGet('SELECT * FROM restaurants LIMIT 1');
+  assert.ok(restaurant, 'Restaurant should be seeded');
+  assert.ok(restaurant.name.includes('Annapoorna'));
 
-  const catalog = await dbAll('SELECT * FROM catalog');
-  assert.ok(catalog.length >= 4, 'Catalog should contain seeded items');
+  const catalog = await dbAll('SELECT * FROM catalog_items');
+  assert.ok(catalog.length >= 4, 'Catalog items should contain seeded items');
 });
 
 test('DB Layer: Customer Profiles & Order Counters', async () => {
@@ -71,11 +71,12 @@ test('DB Layer: Address Saving & Landmark Retrieval', async () => {
 
 test('DB Layer: Last Order Lookup', async () => {
   const phone = '+919000000003';
+  const customer = await upsertCustomerProfile({ phone, name: 'Suresh' });
   
   await dbRun(
-    `INSERT INTO orders (call_id, caller_phone, items, total_amount, delivery_address, status)
+    `INSERT INTO orders (restaurant_id, customer_id, items, total_amount, delivery_address, status)
      VALUES (?, ?, ?, ?, ?, ?)`,
-    [1, phone, JSON.stringify([{ name: 'Mutton Biryani', quantity: 1, price: 280 }]), 280, 'Peelamedu', 'confirmed']
+    ['r_coimbatore_01', customer.id, JSON.stringify([{ name: 'Mutton Biryani', quantity: 1, price: 280 }]), 280, 'Peelamedu', 'confirmed']
   );
 
   const lastOrder = await getLastOrderForPhone(phone);

@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  voicecart-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: voicecart-server
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - DB_PATH=/app/data/voicecart.db
+      - REDIS_URL=redis://redis:6379
+      - AI_LLM_PRIMARY_PROVIDER=gemini
+      - AI_TTS_PROVIDER=sarvam
+      - AI_STT_PROVIDER=sarvam
+      - AI_PROMPT_VERSION=v2
+      - DISPATCH_MODE=direct
+    volumes:
+      - voicecart-data:/app/data
+      - voicecart-recordings:/app/server/recordings
+    depends_on:
+      - redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/engine-status"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+
+  redis:
+    image: redis:7-alpine
+    container_name: voicecart-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  voicecart-data:
+  voicecart-recordings:
+  redis-data:

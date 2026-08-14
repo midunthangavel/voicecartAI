@@ -37,3 +37,5 @@ yarn-error.log*
 .idea/
 .DS_Store
 Thumbs.db
+Phase2_extracted.txt
+.github/

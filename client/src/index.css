@@ -258,9 +258,74 @@ body {
 }
 
 .sidebar-footer {
-  padding: 18px 20px;
+  padding: 14px 16px;
   border-top: 1px solid var(--border-subtle);
   background: var(--bg-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Sidebar Engine Status Card */
+.sidebar-engine-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  box-shadow: var(--neu-shadow-button);
+}
+
+.engine-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 6px;
+}
+
+.engine-pills {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.engine-pill {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.72rem;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+}
+
+.engine-pill .pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-emerald);
+  box-shadow: 0 0 6px var(--accent-emerald);
+}
+
+.engine-pill .pill-icon {
+  color: var(--text-muted);
+}
+
+.engine-pill .pill-label {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.engine-pill .pill-val {
+  color: var(--text-primary);
+  font-weight: 700;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  margin-left: auto;
 }
 
 /* Theme Toggle Button */

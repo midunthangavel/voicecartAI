@@ -1,5 +1,5 @@
-import React from 'react';
-import { Mic, MonitorSpeaker, ShoppingBag, BookOpen, BarChart3, Zap, Sun, Moon, Smartphone } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Mic, MonitorSpeaker, ShoppingBag, BookOpen, BarChart3, Zap, Sun, Moon, Cpu, Radio, Volume2 } from 'lucide-react';
 
 const navItems = [
   { id: 'simulator', label: 'Voice Simulator', icon: Mic },
@@ -10,6 +10,38 @@ const navItems = [
 ];
 
 export default function Sidebar({ activeView, onNavigate, activeCalls, serverStatus, theme, onToggleTheme }) {
+  const [engineStatus, setEngineStatus] = useState(null);
+
+  const isLocal = ['localhost', '127.0.0.1'].includes(window.location.hostname) || window.location.hostname.startsWith('10.');
+  const apiBase = isLocal ? '' : 'https://voicecartai.onrender.com';
+
+  useEffect(() => {
+    async function fetchEngineStatus() {
+      try {
+        const res = await fetch(`${apiBase}/api/engine-status`);
+        if (res.ok) {
+          setEngineStatus(await res.json());
+        }
+      } catch {}
+    }
+    fetchEngineStatus();
+    const interval = setInterval(fetchEngineStatus, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const llmName = engineStatus?.llm?.provider === 'groq' ? 'Groq Llama 3.3'
+    : engineStatus?.llm?.provider === 'openrouter' ? 'OpenRouter Qwen'
+    : engineStatus?.llm?.provider === 'gemini' ? 'Gemini Flash'
+    : 'Gemini (Auto)';
+
+  const sttName = engineStatus?.stt?.provider === 'groq' ? 'Groq Whisper'
+    : engineStatus?.stt?.provider === 'google' ? 'Google STT'
+    : 'Mock STT';
+
+  const ttsName = engineStatus?.tts?.provider === 'sarvam' ? 'Sarvam Bulbul'
+    : engineStatus?.tts?.provider === 'google' ? 'Google TTS'
+    : 'Mock TTS';
+
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
@@ -38,8 +70,33 @@ export default function Sidebar({ activeView, onNavigate, activeCalls, serverSta
         ))}
       </nav>
 
-      {/* Theme Toggle + Server Status */}
+      {/* Engine Status & Theme Footer */}
       <div className="sidebar-footer">
+        {/* Active AI Stack Badge */}
+        <div className="sidebar-engine-card">
+          <div className="engine-card-header">
+            <Cpu size={13} color="var(--accent-violet)" />
+            <span>Active AI Pipeline</span>
+          </div>
+          <div className="engine-pills">
+            <div className="engine-pill" title="LLM Intent & Dialogue Engine">
+              <span className="pill-dot live" />
+              <span className="pill-label">LLM:</span>
+              <span className="pill-val">{llmName}</span>
+            </div>
+            <div className="engine-pill" title="Speech to Text Engine">
+              <Radio size={11} className="pill-icon" />
+              <span className="pill-label">STT:</span>
+              <span className="pill-val">{sttName}</span>
+            </div>
+            <div className="engine-pill" title="Voice Synthesis Engine">
+              <Volume2 size={11} className="pill-icon" />
+              <span className="pill-label">TTS:</span>
+              <span className="pill-val">{ttsName}</span>
+            </div>
+          </div>
+        </div>
+
         <div
           className="theme-toggle-btn"
           onClick={onToggleTheme}
@@ -51,7 +108,7 @@ export default function Sidebar({ activeView, onNavigate, activeCalls, serverSta
           <span>{theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>
         </div>
 
-        <div className="sidebar-status" style={{ marginTop: '12px' }}>
+        <div className="sidebar-status" style={{ marginTop: '10px' }}>
           <div className={`status-dot ${serverStatus === 'online' ? '' : 'offline'}`} />
           <span>{serverStatus === 'online' ? 'Server Connected' : 'Disconnected'}</span>
         </div>

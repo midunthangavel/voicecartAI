@@ -1,24 +1,20 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { ShoppingBag, CreditCard, Truck, MessageSquare, RefreshCw, Pause, Users, Volume2 } from 'lucide-react';
+import React, { useState, useRef } from 'react';
+import { ShoppingBag, CreditCard, Truck, MessageSquare, RefreshCw, Pause, Users, Volume2, ChefHat, CheckCircle2, Clock } from 'lucide-react';
+import { useKds } from '../hooks/useKds.js';
 
-export default function OrderDispatch() {
-  const [orders, setOrders] = useState([]);
-  const [filter, setFilter] = useState('all');
+export default function OrderDispatch({ events = [] }) {
+  const {
+    orders,
+    rawOrders,
+    loading,
+    filterStatus,
+    setFilterStatus,
+    updateOrderStatus,
+    refreshOrders,
+  } = useKds(events);
+
   const [playingAudio, setPlayingAudio] = useState(null);
   const audioRef = useRef(null);
-
-  useEffect(() => {
-    fetchOrders();
-    const interval = setInterval(fetchOrders, 5000);
-    return () => clearInterval(interval);
-  }, []);
-
-  async function fetchOrders() {
-    try {
-      const res = await fetch('/api/orders');
-      if (res.ok) setOrders(await res.json());
-    } catch {}
-  }
 
   function toggleAudio(callId) {
     if (playingAudio === callId) {
@@ -34,17 +30,16 @@ export default function OrderDispatch() {
     }
   }
 
-  const filtered = filter === 'all' ? orders : orders.filter(o => o.status === filter);
-
   const statusCounts = {
-    all: orders.length,
-    pending: orders.filter(o => o.status === 'pending').length,
-    confirmed: orders.filter(o => o.status === 'confirmed').length,
+    all: rawOrders.length,
+    active: rawOrders.filter(o => ['pending', 'confirmed', 'preparing', 'ready'].includes(o.status)).length,
+    confirmed: rawOrders.filter(o => o.status === 'confirmed').length,
+    preparing: rawOrders.filter(o => o.status === 'preparing').length,
+    ready: rawOrders.filter(o => o.status === 'ready').length,
+    completed: rawOrders.filter(o => o.status === 'completed').length,
   };
 
-  // Check if order has group items (items with "person" field)
-  const isGroupOrder = (items) => items?.some(i => i.person);
-  // Group items by person
+  const isGroupOrder = (items) => Array.isArray(items) && items.some(i => i.person);
   const groupByPerson = (items) => {
     const groups = {};
     (items || []).forEach(i => {
@@ -59,38 +54,45 @@ export default function OrderDispatch() {
     <div>
       <div className="page-header">
         <div>
-          <h2 className="page-title">Orders & Kitchen Display</h2>
-          <p className="page-subtitle">Real-time order dispatch, KDS tickets, audio dispute player, and payment tracking</p>
+          <h2 className="page-title">Orders & Kitchen Display System (KDS)</h2>
+          <p className="page-subtitle">Real-time order tickets, preparation status transitions, dispute audio, and snapshot pricing</p>
         </div>
-        <button className="btn btn-ghost btn-sm" onClick={fetchOrders}>
-          <RefreshCw size={14} /> Refresh
+        <button className="btn btn-ghost btn-sm" onClick={refreshOrders}>
+          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Refresh
         </button>
       </div>
 
       {/* Filter Tabs */}
-      <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
-        {['all', 'pending', 'confirmed'].map(f => (
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '20px', flexWrap: 'wrap' }}>
+        {[
+          { id: 'all', label: 'All Orders' },
+          { id: 'active', label: 'Active Pipeline' },
+          { id: 'confirmed', label: 'Confirmed' },
+          { id: 'preparing', label: 'In Kitchen' },
+          { id: 'ready', label: 'Ready for Pickup' },
+          { id: 'completed', label: 'Completed' },
+        ].map(tab => (
           <button
-            key={f}
-            className={`btn btn-sm ${filter === f ? 'btn-primary' : 'btn-ghost'}`}
-            onClick={() => setFilter(f)}
+            key={tab.id}
+            className={`btn btn-sm ${filterStatus === tab.id ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setFilterStatus(tab.id)}
           >
-            {f.charAt(0).toUpperCase() + f.slice(1)} ({statusCounts[f]})
+            {tab.label} ({statusCounts[tab.id] || 0})
           </button>
         ))}
       </div>
 
-      {filtered.length === 0 ? (
+      {orders.length === 0 ? (
         <div className="card">
           <div className="empty-state">
             <ShoppingBag className="empty-state-icon" />
-            <h3>No orders yet</h3>
-            <p>Complete a voice ordering session to see orders appear here in real-time</p>
+            <h3>No orders matching filter</h3>
+            <p>Complete a voice ordering session or place an order to see live KDS tickets</p>
           </div>
         </div>
       ) : (
         <div className="orders-grid">
-          {filtered.map(order => {
+          {orders.map(order => {
             const hasGroup = isGroupOrder(order.items);
             const personGroups = hasGroup ? groupByPerson(order.items) : null;
 
@@ -112,7 +114,7 @@ export default function OrderDispatch() {
                   </div>
                 </div>
 
-                {/* Items List — grouped by person if group order */}
+                {/* Items List */}
                 {hasGroup && personGroups ? (
                   Object.entries(personGroups).map(([person, items]) => (
                     <div key={person} style={{ marginBottom: '8px' }}>
@@ -125,8 +127,8 @@ export default function OrderDispatch() {
                       <ul className="order-items-list" style={{ marginLeft: '12px' }}>
                         {items.map((item, i) => (
                           <li key={i}>
-                            <span>{item.quantity}× {item.name}</span>
-                            <span style={{ fontFamily: 'var(--font-mono)' }}>₹{(item.price || 0) * (item.quantity || 1)}</span>
+                            <span>{item.quantity}× {item.name || item.item_name_snapshot}</span>
+                            <span style={{ fontFamily: 'var(--font-mono)' }}>₹{(item.price || item.unit_price_snapshot || 0) * (item.quantity || 1)}</span>
                           </li>
                         ))}
                       </ul>
@@ -136,8 +138,8 @@ export default function OrderDispatch() {
                   <ul className="order-items-list">
                     {(order.items || []).map((item, i) => (
                       <li key={i}>
-                        <span>{item.quantity}× {item.name}</span>
-                        <span style={{ fontFamily: 'var(--font-mono)' }}>₹{(item.price || 0) * (item.quantity || 1)}</span>
+                        <span>{item.quantity}× {item.name || item.item_name_snapshot}</span>
+                        <span style={{ fontFamily: 'var(--font-mono)' }}>₹{(item.price || item.unit_price_snapshot || 0) * (item.quantity || 1)}</span>
                       </li>
                     ))}
                   </ul>
@@ -145,13 +147,44 @@ export default function OrderDispatch() {
 
                 <div className="order-total">
                   <span>Total</span>
-                  <span style={{ color: 'var(--accent-emerald)' }}>₹{order.total_amount}</span>
+                  <span style={{ color: 'var(--accent-emerald)', fontWeight: 700 }}>₹{order.total_amount}</span>
                 </div>
 
-                <div className="order-meta">
+                {/* KDS Status Action Controls */}
+                <div style={{ display: 'flex', gap: '6px', marginTop: '12px' }}>
+                  {order.status === 'confirmed' && (
+                    <button
+                      className="btn btn-sm btn-primary"
+                      style={{ flex: 1, fontSize: '0.72rem' }}
+                      onClick={() => updateOrderStatus(order.id, 'preparing')}
+                    >
+                      <ChefHat size={12} /> Start Cooking
+                    </button>
+                  )}
+                  {order.status === 'preparing' && (
+                    <button
+                      className="btn btn-sm btn-primary"
+                      style={{ flex: 1, fontSize: '0.72rem', background: 'var(--accent-cyan)' }}
+                      onClick={() => updateOrderStatus(order.id, 'ready')}
+                    >
+                      <Clock size={12} /> Mark Ready
+                    </button>
+                  )}
+                  {['ready', 'dispatched'].includes(order.status) && (
+                    <button
+                      className="btn btn-sm btn-ghost"
+                      style={{ flex: 1, fontSize: '0.72rem', borderColor: 'var(--accent-emerald)', color: 'var(--accent-emerald)' }}
+                      onClick={() => updateOrderStatus(order.id, 'completed')}
+                    >
+                      <CheckCircle2 size={12} /> Complete
+                    </button>
+                  )}
+                </div>
+
+                <div className="order-meta" style={{ marginTop: '10px' }}>
                   <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                     <Truck size={12} />
-                    {order.dispatch_mode === 'ondc' ? 'ONDC' : 'Direct'}
+                    {order.dispatch_mode === 'ondc' ? 'ONDC' : 'Direct POS'}
                   </span>
                   <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                     <CreditCard size={12} />
@@ -163,7 +196,53 @@ export default function OrderDispatch() {
                   </span>
                 </div>
 
-                {/* ── Audio Dispute Player ── */}
+                {/* Dispute Status & Actions */}
+                {order.dispute_status && order.dispute_status !== 'none' && (
+                  <div style={{
+                    marginTop: '8px', padding: '6px 10px',
+                    background: order.dispute_status === 'refunded' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                    border: `1px solid ${order.dispute_status === 'refunded' ? 'var(--accent-emerald)' : 'var(--accent-rose)'}`,
+                    borderRadius: 'var(--radius-sm)', fontSize: '0.72rem',
+                    color: order.dispute_status === 'refunded' ? 'var(--accent-emerald)' : 'var(--accent-rose)',
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  }}>
+                    <span>⚠️ Dispute: <strong>{order.dispute_status.toUpperCase()}</strong></span>
+                    {order.dispute_status === 'pending_review' && (
+                      <div style={{ display: 'flex', gap: '4px' }}>
+                        <button
+                          className="btn btn-sm"
+                          style={{ background: 'var(--accent-emerald)', color: '#fff', padding: '2px 6px', fontSize: '0.65rem' }}
+                          onClick={async () => {
+                            await fetch(`/api/orders/${order.id}/resolve-dispute`, {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ resolution: 'refund', notes: 'Refund approved by store manager' }),
+                            });
+                            refreshOrders();
+                          }}
+                        >
+                          Refund
+                        </button>
+                        <button
+                          className="btn btn-sm btn-ghost"
+                          style={{ padding: '2px 6px', fontSize: '0.65rem', borderColor: 'var(--accent-rose)', color: 'var(--accent-rose)' }}
+                          onClick={async () => {
+                            await fetch(`/api/orders/${order.id}/resolve-dispute`, {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ resolution: 'reject', notes: 'Dispute investigated and dismissed' }),
+                            });
+                            refreshOrders();
+                          }}
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Audio Dispute Player */}
                 {order.call_id && (
                   <button
                     className="btn btn-ghost btn-sm"
@@ -175,6 +254,27 @@ export default function OrderDispatch() {
                     ) : (
                       <><Volume2 size={12} /> 🎧 Play Call Recording</>
                     )}
+                  </button>
+                )}
+
+                {/* Raise Dispute button if no active dispute */}
+                {(!order.dispute_status || order.dispute_status === 'none') && (
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    style={{ width: '100%', marginTop: '6px', fontSize: '0.68rem', color: 'var(--text-muted)' }}
+                    onClick={async () => {
+                      const reason = prompt('Enter reason for customer dispute:');
+                      if (reason) {
+                        await fetch(`/api/orders/${order.id}/dispute`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ reason }),
+                        });
+                        refreshOrders();
+                      }
+                    }}
+                  >
+                    Flag Customer Dispute
                   </button>
                 )}
 

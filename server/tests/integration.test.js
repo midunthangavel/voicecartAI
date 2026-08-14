@@ -1,7 +1,38 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createServer } from 'http';
+import { createApp } from '../src/app.js';
+import { initDatabase } from '../src/db.js';
+import { unlinkSync, existsSync } from 'fs';
+import { resolve } from 'path';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:3001';
+let server;
+let BASE_URL;
+const TEST_DB = resolve('./test_integration.db');
+
+test.before(async () => {
+  if (existsSync(TEST_DB)) unlinkSync(TEST_DB);
+  process.env.DB_PATH = TEST_DB;
+  await initDatabase();
+
+  const app = createApp();
+  server = createServer(app);
+
+  await new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      const port = server.address().port;
+      BASE_URL = `http://127.0.0.1:${port}`;
+      resolve();
+    });
+  });
+});
+
+test.after(async () => {
+  if (server) {
+    await new Promise((resolve) => server.close(resolve));
+  }
+  try { if (existsSync(TEST_DB)) unlinkSync(TEST_DB); } catch {}
+});
 
 test('Integration Test: GET /api/stats (Dashboard Statistics)', async () => {
   const res = await fetch(`${BASE_URL}/api/stats`);
