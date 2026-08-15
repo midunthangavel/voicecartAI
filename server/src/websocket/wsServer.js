@@ -5,7 +5,7 @@ import { handleTwilioStream } from './mediaStreamHandler.js';
 import { handleWebStream } from './webStreamHandler.js';
 import { handleExotelStream } from './exotelStreamHandler.js';
 import { verifyToken } from '../services/auth.service.js';
-import { consumeWsTicket } from '../services/wsTicketService.js';
+import { consumeWsTicket, consumeStreamTicket } from '../services/wsTicketService.js';
 import { logger } from '../utils/logger.js';
 
 // In-memory active session store
@@ -71,7 +71,7 @@ export function createWebSocketCoordinator(httpServer) {
         }
       }
 
-      // ── 2. Browser Voice Web-Stream Authentication ──
+      // ── 2. Browser Voice Web-Stream Authentication (Strict, No ?demo bypass) ──
       if (pathname === '/web-stream') {
         const ticket = url.searchParams.get('ticket') || url.searchParams.get('voice_token');
         const token = url.searchParams.get('token') ||
@@ -87,17 +87,35 @@ export function createWebSocketCoordinator(httpServer) {
           } catch {}
         }
 
-        // Allow public demo callers in dev if explicitly unauthenticated, but require ticket in prod
         if (voiceAuth) {
           request.auth = voiceAuth;
-        } else if (process.env.NODE_ENV === 'production' && !url.searchParams.get('demo')) {
+        } else if (process.env.NODE_ENV === 'production') {
           socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
           socket.destroy();
           return;
         }
       }
 
-      // ── 3. Complete Upgrade ──
+      // ── 3. Telephony Streams Authentication (Twilio / Exotel Stream Tickets) ──
+      if (pathname === '/media-stream' || pathname === '/exotel-stream') {
+        const streamTicket = url.searchParams.get('ticket');
+        let streamMeta = null;
+
+        if (streamTicket) {
+          streamMeta = consumeStreamTicket(streamTicket);
+        }
+
+        if (streamMeta) {
+          request.streamMeta = streamMeta;
+        } else if (process.env.NODE_ENV === 'production') {
+          logger.warn(`[TelephonyWS] Unauthorized stream connection attempt on ${pathname}`);
+          socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+          socket.destroy();
+          return;
+        }
+      }
+
+      // ── 4. Complete Upgrade ──
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request);
       });
@@ -113,17 +131,18 @@ export function createWebSocketCoordinator(httpServer) {
     const pathname = url.pathname;
 
     ws.auth = request.auth || null;
+    ws.streamMeta = request.streamMeta || null;
     ws.isAlive = true;
     ws.on('pong', () => { ws.isAlive = true; });
 
     if (pathname === '/dashboard-ws') {
       handleDashboardConnection(ws, request);
     } else if (pathname === '/media-stream') {
-      handleTwilioStream(ws, request);
+      handleTwilioStream(ws, sessions); // Pass shared sessions map
     } else if (pathname === '/web-stream') {
-      handleWebStream(ws, request);
+      handleWebStream(ws, sessions); // Pass shared sessions map
     } else if (pathname === '/exotel-stream') {
-      handleExotelStream(ws, request);
+      handleExotelStream(ws, request, sessions); // Pass (ws, request, sessions)
     }
   });
 

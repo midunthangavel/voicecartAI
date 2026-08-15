@@ -22,11 +22,14 @@ export class StorageService {
   /**
    * Generates a structured object key
    */
-  generateObjectKey({ tenantId = 't_annapoorna', restaurantId = 'r_coimbatore_01', callId, extension = 'wav' }) {
+  generateObjectKey({ tenantId, restaurantId, callId, extension = 'wav' }) {
+    if (!tenantId || !restaurantId) {
+      throw new Error('[StorageService] Explicit tenantId and restaurantId are required to generate storage key');
+    }
     const now = new Date();
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, '0');
-    return `${tenantId}/${restaurantId}/${year}/${month}/call_${callId || 'demo'}_${Date.now()}.${extension}`;
+    return `${tenantId}/${restaurantId}/${year}/${month}/call_${callId || 'call'}_${Date.now()}.${extension}`;
   }
 
   /**

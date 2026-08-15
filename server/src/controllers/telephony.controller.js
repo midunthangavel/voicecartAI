@@ -7,15 +7,19 @@ import { AppError } from '../utils/AppError.js';
 
 const PORT = process.env.PORT || 3001;
 
+import { createStreamTicket } from '../services/wsTicketService.js';
+
 /**
  * Exotel Voice Inbound Webhook (Primary for India — TRAI Compliant)
  */
 export function handleExotelVoice(req, res) {
   const publicUrl = process.env.PUBLIC_URL || `http://localhost:${PORT}`;
-  const wsStreamUrl = `${publicUrl.replace(/^http/, 'ws')}/exotel-stream`;
+  const callSid = req.body.CallSid || req.body.CallUUID || `exotel_${Date.now()}`;
+  const streamTicket = createStreamTicket({ callSid, callerPhone: req.body.From, provider: 'exotel' });
+  const wsStreamUrl = `${publicUrl.replace(/^http/, 'ws')}/exotel-stream?ticket=${streamTicket}`;
   const xml = generateExotelVoiceXml(wsStreamUrl);
   res.type('text/xml').send(xml);
-  console.log('[Exotel] Inbound call received, streaming via AgentStream to /exotel-stream');
+  console.log('[Exotel] Inbound call received, streaming via AgentStream to /exotel-stream with stream ticket');
 }
 
 /**
@@ -23,15 +27,17 @@ export function handleExotelVoice(req, res) {
  */
 export function handleTwilioVoice(req, res) {
   const publicUrl = process.env.PUBLIC_URL || `http://localhost:${PORT}`;
+  const callSid = req.body.CallSid || `twilio_${Date.now()}`;
+  const streamTicket = createStreamTicket({ callSid, callerPhone: req.body.From, provider: 'twilio' });
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="Polly.Aditi" language="en-IN">Vanakkam! Welcome to VoiceCart AI. What would you like to order today?</Say>
   <Connect>
-    <Stream url="${publicUrl.replace(/^http/, 'ws')}/media-stream" />
+    <Stream url="${publicUrl.replace(/^http/, 'ws')}/media-stream?ticket=${streamTicket}" />
   </Connect>
 </Response>`;
   res.type('text/xml').send(twiml);
-  console.log('[Twilio] Voice webhook hit, streaming to /media-stream');
+  console.log('[Twilio] Voice webhook hit, streaming to /media-stream with stream ticket');
 }
 
 /**

@@ -1,12 +1,18 @@
 import { dbAll, dbGet, dbRun } from '../../db.js';
+import { AppError } from '../../utils/AppError.js';
 
 /**
  * Catalog Repository — Manages categories, items, and variants with strict multi-tenant scoping
+ * Strict fail-closed tenant validation with zero default fallbacks.
  */
 
 export async function getCategoriesByRestaurant(options = {}) {
-  const tenantId = typeof options === 'object' ? (options.tenantId || 't_annapoorna') : 't_annapoorna';
-  const restaurantId = typeof options === 'string' ? options : (options.restaurantId || 'r_coimbatore_01');
+  const tenantId = typeof options === 'object' ? options.tenantId : null;
+  const restaurantId = typeof options === 'object' ? options.restaurantId : (typeof options === 'string' ? options : null);
+
+  if (!tenantId || !restaurantId) {
+    throw new AppError(500, 'TENANT_CONTEXT_REQUIRED', 'Explicit tenantId and restaurantId are required to query categories');
+  }
 
   return dbAll(
     'SELECT * FROM catalog_categories WHERE tenant_id = ? AND restaurant_id = ? AND active = 1 ORDER BY sort_order ASC',
@@ -15,8 +21,12 @@ export async function getCategoriesByRestaurant(options = {}) {
 }
 
 export async function getActiveCatalogItems(options = {}) {
-  const tenantId = typeof options === 'object' ? (options.tenantId || 't_annapoorna') : 't_annapoorna';
-  const restaurantId = typeof options === 'string' ? options : (options.restaurantId || 'r_coimbatore_01');
+  const tenantId = typeof options === 'object' ? options.tenantId : null;
+  const restaurantId = typeof options === 'object' ? options.restaurantId : (typeof options === 'string' ? options : null);
+
+  if (!tenantId || !restaurantId) {
+    throw new AppError(500, 'TENANT_CONTEXT_REQUIRED', 'Explicit tenantId and restaurantId are required to query catalog items');
+  }
 
   const rows = await dbAll(
     `SELECT i.*, c.name as category_name, c.name_tamil as category_name_tamil 
@@ -36,8 +46,12 @@ export async function getActiveCatalogItems(options = {}) {
 }
 
 export async function getCatalogItemById(itemId, options = {}) {
-  const tenantId = typeof options === 'object' ? (options.tenantId || 't_annapoorna') : 't_annapoorna';
-  const restaurantId = typeof options === 'string' ? options : (options.restaurantId || 'r_coimbatore_01');
+  const tenantId = typeof options === 'object' ? options.tenantId : null;
+  const restaurantId = typeof options === 'object' ? options.restaurantId : (typeof options === 'string' ? options : null);
+
+  if (!tenantId || !restaurantId) {
+    throw new AppError(500, 'TENANT_CONTEXT_REQUIRED', 'Explicit tenantId and restaurantId are required to get a catalog item');
+  }
 
   const row = await dbGet(
     'SELECT * FROM catalog_items WHERE id = ? AND tenant_id = ? AND restaurant_id = ?',
@@ -53,8 +67,8 @@ export async function getCatalogItemById(itemId, options = {}) {
 }
 
 export async function createCatalogItem({
-  tenant_id = 't_annapoorna',
-  restaurant_id = 'r_coimbatore_01',
+  tenant_id,
+  restaurant_id,
   category_id,
   sku = null,
   name,
@@ -66,6 +80,10 @@ export async function createCatalogItem({
   dietary_tags = 'none',
   stt_hints = [],
 }) {
+  if (!tenant_id || !restaurant_id) {
+    throw new AppError(500, 'TENANT_CONTEXT_REQUIRED', 'Explicit tenant_id and restaurant_id are required to create a catalog item');
+  }
+
   const res = await dbRun(
     `INSERT INTO catalog_items (
        tenant_id, restaurant_id, category_id, sku, name, name_tamil, description, 

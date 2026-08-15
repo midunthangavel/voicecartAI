@@ -1,15 +1,22 @@
 import { getActiveCatalogItems, getCategoriesByRestaurant, createCatalogItem } from '../domain/catalog/catalog.repository.js';
 import { dbAll } from '../db.js';
+import { AppError } from '../utils/AppError.js';
 
 /**
  * Controller for Restaurant Menu Catalog and Categories
- * Scoped strictly by server-side authenticated identity (req.auth).
+ * Scoped strictly by server-side authenticated identity or explicit query parameters.
  */
+
+function resolveTenantContext(req) {
+  const tenantId = req.auth?.tenantId || req.query?.tenant_id || req.headers['x-tenant-id'] || 't_annapoorna';
+  const restaurantId = req.auth?.restaurantId || req.query?.restaurant_id || req.headers['x-restaurant-id'] || 'r_coimbatore_01';
+
+  return { tenantId, restaurantId };
+}
 
 export async function getCatalog(req, res, next) {
   try {
-    const tenantId = req.auth?.tenantId || 't_annapoorna';
-    const restaurantId = req.auth?.restaurantId || 'r_coimbatore_01';
+    const { tenantId, restaurantId } = resolveTenantContext(req);
     const items = await getActiveCatalogItems({ tenantId, restaurantId });
     res.json(items);
   } catch (err) {
@@ -19,8 +26,7 @@ export async function getCatalog(req, res, next) {
 
 export async function getCategories(req, res, next) {
   try {
-    const tenantId = req.auth?.tenantId || 't_annapoorna';
-    const restaurantId = req.auth?.restaurantId || 'r_coimbatore_01';
+    const { tenantId, restaurantId } = resolveTenantContext(req);
     const categories = await getCategoriesByRestaurant({ tenantId, restaurantId });
     res.json(categories);
   } catch (err) {
@@ -30,8 +36,13 @@ export async function getCategories(req, res, next) {
 
 export async function addCatalogItem(req, res, next) {
   try {
-    const tenantId = req.auth?.tenantId || 't_annapoorna';
-    const restaurantId = req.auth?.restaurantId || 'r_coimbatore_01';
+    const tenantId = req.auth?.tenantId;
+    const restaurantId = req.auth?.restaurantId;
+
+    if (!tenantId || !restaurantId) {
+      throw new AppError(401, 'AUTH_CONTEXT_MISSING', 'Authenticated restaurant manager context is required');
+    }
+
     const {
       category_id,
       sku = null,
@@ -60,7 +71,7 @@ export async function addCatalogItem(req, res, next) {
       stt_hints,
     });
 
-    res.status(201).json({ id, success: true });
+    res.status(201).json({ success: true, id, name, price });
   } catch (err) {
     next(err);
   }
@@ -68,12 +79,9 @@ export async function addCatalogItem(req, res, next) {
 
 export async function getMerchants(req, res, next) {
   try {
-    const tenantId = req.auth?.tenantId || 't_annapoorna';
-    const merchants = await dbAll(
-      'SELECT id, tenant_id, name, address, phone, fssai_license, active FROM restaurants WHERE tenant_id = ? ORDER BY name ASC',
-      [tenantId]
-    );
-    res.json(merchants);
+    const tenantId = req.auth?.tenantId || req.query?.tenant_id || 't_annapoorna';
+    const rows = await dbAll('SELECT * FROM restaurants WHERE tenant_id = ? AND status = "active"', [tenantId]);
+    res.json(rows);
   } catch (err) {
     next(err);
   }

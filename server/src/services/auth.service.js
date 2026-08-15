@@ -45,15 +45,22 @@ export function verifyPassword(password, storedHash) {
 }
 
 /**
- * Generate short-lived Access Token (15m)
+ * Generate short-lived Access Token (15m) with strict tenant context
  */
 export async function generateToken(user) {
+  const tenantId = user.tenant_id || user.tenantId;
+  const restaurantId = user.restaurant_id || user.restaurantId;
+
+  if (!tenantId || !restaurantId) {
+    throw new AppError(500, 'TENANT_CONTEXT_REQUIRED', 'Tenant and restaurant context required to issue token');
+  }
+
   return new SignJWT({
     sub: String(user.id),
     email: user.email,
     name: user.name,
-    tenant_id: user.tenant_id || user.tenantId || 't_annapoorna',
-    restaurant_id: user.restaurant_id || user.restaurantId || 'r_coimbatore_01',
+    tenant_id: tenantId,
+    restaurant_id: restaurantId,
     role: user.role || 'STAFF',
   })
     .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
@@ -65,7 +72,7 @@ export async function generateToken(user) {
 }
 
 /**
- * Generate short-lived Access Token + 7-Day Refresh Token Pair
+ * Generate short-lived Access Token + 7-Day Refresh Token Pair (Fail-Closed DB Persistence)
  */
 export async function generateTokenPair(user) {
   const accessToken = await generateToken(user);
@@ -83,16 +90,12 @@ export async function generateTokenPair(user) {
     .setExpirationTime('7d')
     .sign(JWT_KEY);
 
-  // Store refresh token in database ledger
-  try {
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-    await dbRun(
-      'INSERT INTO refresh_tokens (user_id, jti, expires_at) VALUES (?, ?, ?)',
-      [String(user.id), jti, expiresAt]
-    );
-  } catch (err) {
-    logger.warn('[Auth] Failed to persist refresh token to database:', err.message);
-  }
+  // Store refresh token in database ledger — FAIL CLOSED if persistence fails
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  await dbRun(
+    'INSERT INTO refresh_tokens (user_id, jti, expires_at) VALUES (?, ?, ?)',
+    [String(user.id), jti, expiresAt]
+  );
 
   return {
     accessToken,
@@ -117,7 +120,7 @@ export async function verifyToken(token) {
 }
 
 /**
- * Rotate Refresh Token — Validates single-use refresh token and returns new pair
+ * Rotate Refresh Token — Requires registered JTI in database
  */
 export async function rotateRefreshToken(refreshTokenString) {
   const payload = await verifyToken(refreshTokenString);
@@ -125,17 +128,21 @@ export async function rotateRefreshToken(refreshTokenString) {
     throw new AppError(401, 'INVALID_REFRESH_TOKEN', 'Supplied token is not a valid refresh token');
   }
 
-  // Check revocation in database
+  // 1. Enforce strict existence check for JTI in database
   const tokenRecord = await dbGet(
     'SELECT * FROM refresh_tokens WHERE jti = ?',
     [payload.jti]
   );
 
-  if (tokenRecord && tokenRecord.revoked_at) {
+  if (!tokenRecord) {
+    throw new AppError(401, 'INVALID_REFRESH_TOKEN', 'Refresh token is not registered');
+  }
+
+  if (tokenRecord.revoked_at) {
     throw new AppError(401, 'REFRESH_TOKEN_REVOKED', 'Refresh token has been revoked. Please log in again.');
   }
 
-  // Revoke the old refresh token (Single-use rotation)
+  // 2. Revoke the old refresh token (Single-use rotation)
   await dbRun(
     'UPDATE refresh_tokens SET revoked_at = CURRENT_TIMESTAMP WHERE jti = ?',
     [payload.jti]

@@ -18,13 +18,18 @@ const VALID_TRANSITIONS = {
 
 /**
  * Order Repository — Authoritative persistence for orders and line-item snapshots
- * Enforces strict multi-tenant scoping, optimistic concurrency control, state machine validation, and transactional outbox.
+ * Strict multi-tenant scoping (Fail-Closed, zero defaults), optimistic concurrency, and state machine validation.
  */
 
 export async function createOrderWithSnapshots(orderData, items = []) {
+  const tenantId = orderData.tenant_id || orderData.tenantId;
+  const restaurantId = orderData.restaurant_id || orderData.restaurantId;
+
+  if (!tenantId || !restaurantId) {
+    throw new AppError(500, 'TENANT_CONTEXT_REQUIRED', 'Explicit tenant_id and restaurant_id are required to create an order');
+  }
+
   const {
-    tenant_id,
-    restaurant_id,
     call_id = null,
     customer_id = null,
     ondc_order_id = null,
@@ -42,9 +47,6 @@ export async function createOrderWithSnapshots(orderData, items = []) {
     scheduled_for = null,
     customer_phone = null,
   } = orderData;
-
-  const tenantId = tenant_id || 't_annapoorna';
-  const restaurantId = restaurant_id || 'r_coimbatore_01';
 
   // Monetary values stored in integer paise
   const subtotalPaise = Math.round(subtotal * 100);
@@ -141,12 +143,12 @@ export async function createOrderWithSnapshots(orderData, items = []) {
 }
 
 export async function getRecentOrders(options = {}) {
-  const tenantId = typeof options === 'object' ? options.tenantId : 't_annapoorna';
-  const restaurantId = typeof options === 'string' ? options : (options.restaurantId || 'r_coimbatore_01');
-  const limit = Math.min(Math.max(parseInt(options.limit, 10) || 50, 1), 100);
+  const tenantId = typeof options === 'object' ? options.tenantId : null;
+  const restaurantId = typeof options === 'object' ? options.restaurantId : null;
+  const limit = Math.min(Math.max(parseInt(options?.limit, 10) || 50, 1), 100);
 
   if (!tenantId || !restaurantId) {
-    throw new AppError(401, 'AUTH_CONTEXT_MISSING', 'Authenticated tenant and restaurant context is required');
+    throw new AppError(500, 'TENANT_CONTEXT_REQUIRED', 'Explicit tenantId and restaurantId are required to query orders');
   }
 
   const orders = await dbAll(
@@ -159,7 +161,6 @@ export async function getRecentOrders(options = {}) {
   const orderIds = orders.map(o => o.id);
   if (orderIds.length === 0) return [];
 
-  // Fetch line items for each order
   const placeholders = orderIds.map(() => '?').join(',');
   const allItems = await dbAll(
     `SELECT * FROM order_items WHERE order_id IN (${placeholders}) ORDER BY id ASC`,
@@ -185,11 +186,11 @@ export async function getRecentOrders(options = {}) {
 }
 
 export async function getOrderWithItems(orderId, options = {}) {
-  const tenantId = typeof options === 'object' ? options.tenantId : 't_annapoorna';
-  const restaurantId = typeof options === 'string' ? options : (options.restaurantId || 'r_coimbatore_01');
+  const tenantId = typeof options === 'object' ? options.tenantId : null;
+  const restaurantId = typeof options === 'object' ? options.restaurantId : null;
 
   if (!tenantId || !restaurantId) {
-    throw new AppError(401, 'AUTH_CONTEXT_MISSING', 'Authenticated tenant and restaurant context is required');
+    throw new AppError(500, 'TENANT_CONTEXT_REQUIRED', 'Explicit tenantId and restaurantId are required to get an order');
   }
 
   const order = await dbGet(
@@ -217,12 +218,12 @@ export async function getOrderWithItems(orderId, options = {}) {
 }
 
 export async function updateOrderStatus(orderId, newStatus, options = {}, actor = { type: 'staff', id: 'system' }) {
-  const tenantId = typeof options === 'object' ? options.tenantId : 't_annapoorna';
-  const restaurantId = typeof options === 'string' ? options : (options.restaurantId || 'r_coimbatore_01');
+  const tenantId = typeof options === 'object' ? options.tenantId : null;
+  const restaurantId = typeof options === 'object' ? options.restaurantId : null;
   const expectedVersion = typeof options === 'object' ? options.expectedVersion : null;
 
   if (!tenantId || !restaurantId) {
-    throw new AppError(401, 'AUTH_CONTEXT_MISSING', 'Authenticated tenant and restaurant context is required');
+    throw new AppError(500, 'TENANT_CONTEXT_REQUIRED', 'Explicit tenantId and restaurantId are required to update order status');
   }
 
   const previous = await dbGet(
@@ -244,7 +245,6 @@ export async function updateOrderStatus(orderId, newStatus, options = {}, actor 
     let query = 'UPDATE orders SET status = ?, version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND tenant_id = ? AND restaurant_id = ?';
     let params = [newStatus, orderId, tenantId, restaurantId];
 
-    // Optimistic Concurrency Control
     if (expectedVersion !== undefined && expectedVersion !== null) {
       query += ' AND version = ?';
       params.push(expectedVersion);
@@ -287,11 +287,11 @@ export async function updateOrderStatus(orderId, newStatus, options = {}, actor 
 }
 
 export async function softDeleteOrder(orderId, options = {}, deletedBy = 'admin') {
-  const tenantId = typeof options === 'object' ? options.tenantId : 't_annapoorna';
-  const restaurantId = typeof options === 'string' ? options : (options.restaurantId || 'r_coimbatore_01');
+  const tenantId = typeof options === 'object' ? options.tenantId : null;
+  const restaurantId = typeof options === 'object' ? options.restaurantId : null;
 
   if (!tenantId || !restaurantId) {
-    throw new AppError(401, 'AUTH_CONTEXT_MISSING', 'Authenticated tenant and restaurant context is required');
+    throw new AppError(500, 'TENANT_CONTEXT_REQUIRED', 'Explicit tenantId and restaurantId are required to delete order');
   }
 
   return transaction(async () => {

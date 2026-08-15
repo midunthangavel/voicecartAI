@@ -1,11 +1,15 @@
 import { EventEmitter } from 'events';
+import { dbRun, dbGet, dbAll, transaction } from '../db.js';
 import { logger } from '../utils/logger.js';
 
+const WORKER_INSTANCE_ID = `worker_${process.pid}_${Math.random().toString(36).slice(2, 6)}`;
+
 /**
- * Universal Asynchronous Job Queue Engine
+ * Universal Database-Backed Durable Job Queue Engine
  * 
- * Provides resilient, non-blocking background task processing with
- * concurrency controls, exponential retry backoff, registered processors, and dead-letter queue (DLQ) tracking.
+ * Guarantees zero-lost jobs across process crashes, restarts, and multi-worker scale.
+ * Persists all jobs to SQLite/PostgreSQL with atomic worker claiming, automatic
+ * crashed-worker recovery, exponential backoff, and dead-letter queue (DLQ) tracking.
  */
 export class JobQueue extends EventEmitter {
   constructor(name, options = {}) {
@@ -15,11 +19,15 @@ export class JobQueue extends EventEmitter {
     this.maxRetries = options.maxRetries || 3;
     this.initialBackoffMs = options.initialBackoffMs || 1000;
 
-    this.queue = [];
     this.runningCount = 0;
     this.processors = new Map();
-    this.dlq = []; // Dead-Letter Queue
     this.isPaused = false;
+    this.drainTimer = null;
+
+    // Periodic sweep for scheduled/stale jobs every 5 seconds
+    this.drainTimer = setInterval(() => {
+      this._drain();
+    }, 5000);
   }
 
   /**
@@ -27,37 +35,44 @@ export class JobQueue extends EventEmitter {
    */
   process(jobType, handler) {
     if (typeof jobType === 'function' && !handler) {
-      // Default processor for all jobs in this queue
       this.processors.set('__default__', jobType);
     } else {
       this.processors.set(jobType, handler);
     }
-    this._drain();
+    setImmediate(() => this._drain());
   }
 
   /**
-   * Add a job to the queue
+   * Add a job to the durable database-backed queue
    */
   async add(jobType, data = {}, options = {}) {
     let type = jobType;
     let payload = data;
 
-    // Handle single-argument invocation
     if (typeof jobType === 'object' && !data.type) {
       payload = jobType;
       type = payload.type || '__default__';
     }
 
+    const payloadStr = typeof payload === 'string' ? payload : JSON.stringify(payload);
+    const maxRetries = options.maxRetries || this.maxRetries;
+
+    const res = await dbRun(
+      `INSERT INTO durable_job_queue (
+         queue_name, job_type, payload, max_retries, status, scheduled_at
+       ) VALUES (?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP)`,
+      [this.name, type, payloadStr, maxRetries]
+    );
+
     const job = {
-      id: `${this.name}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      id: res.lastID,
+      queue: this.name,
       type,
       data: payload,
       attempts: 0,
-      maxRetries: options.maxRetries || this.maxRetries,
-      createdAt: new Date().toISOString(),
+      maxRetries,
     };
 
-    this.queue.push(job);
     this.emit('added', job);
     setImmediate(() => this._drain());
     return job;
@@ -72,50 +87,115 @@ export class JobQueue extends EventEmitter {
   }
 
   /**
-   * Internal queue drain worker loop
+   * Recover stale processing jobs (crashed workers older than 5 minutes)
+   */
+  async _recoverStaleJobs() {
+    try {
+      await dbRun(
+        `UPDATE durable_job_queue 
+         SET status = 'pending', locked_by = NULL 
+         WHERE queue_name = ? AND status = 'processing' 
+           AND locked_at < datetime('now', '-5 minutes')`,
+        [this.name]
+      );
+    } catch {}
+  }
+
+  /**
+   * Internal queue drain worker loop with atomic database claim
    */
   async _drain() {
-    if (this.isPaused || this.runningCount >= this.concurrency || this.queue.length === 0) {
+    if (this.isPaused || this.runningCount >= this.concurrency || this.processors.size === 0) {
       return;
     }
 
-    const job = this.queue.shift();
-    if (!job) return;
+    await this._recoverStaleJobs();
+
+    // Atomically claim next pending job
+    let jobRecord = null;
+    try {
+      jobRecord = await transaction(async () => {
+        const pending = await dbGet(
+          `SELECT * FROM durable_job_queue 
+           WHERE queue_name = ? AND status = 'pending' 
+             AND (scheduled_at IS NULL OR scheduled_at <= datetime('now')) 
+           ORDER BY id ASC LIMIT 1`,
+          [this.name]
+        );
+
+        if (!pending) return null;
+
+        await dbRun(
+          `UPDATE durable_job_queue 
+           SET status = 'processing', 
+               locked_at = CURRENT_TIMESTAMP, 
+               locked_by = ?,
+               attempts = attempts + 1 
+           WHERE id = ? AND status = 'pending'`,
+          [WORKER_INSTANCE_ID, pending.id]
+        );
+
+        return {
+          ...pending,
+          attempts: pending.attempts + 1,
+          payload: typeof pending.payload === 'string' ? JSON.parse(pending.payload || '{}') : (pending.payload || {}),
+        };
+      });
+    } catch (err) {
+      // Database not ready yet or busy
+      return;
+    }
+
+    if (!jobRecord) return;
 
     this.runningCount++;
-    job.attempts++;
 
-    const processor = this.processors.get(job.type) || this.processors.get('__default__');
+    const processor = this.processors.get(jobRecord.job_type) || this.processors.get('__default__');
 
     if (!processor) {
-      logger.warn(`[JobQueue:${this.name}] No processor registered for job type "${job.type}". Re-queuing with backoff.`);
-      // Put back in queue if processor isn't ready yet
-      setTimeout(() => {
-        this.queue.push(job);
-        this.runningCount--;
-        this._drain();
-      }, 1000);
+      logger.warn(`[DurableQueue:${this.name}] No processor registered for job type "${jobRecord.job_type}". Re-queuing.`);
+      await dbRun(
+        `UPDATE durable_job_queue SET status = 'pending', locked_by = NULL WHERE id = ?`,
+        [jobRecord.id]
+      );
+      this.runningCount--;
       return;
     }
 
     try {
-      await processor(job.data, job);
-      this.emit('completed', job);
+      await processor(jobRecord.payload, jobRecord);
+      await dbRun(
+        `UPDATE durable_job_queue 
+         SET status = 'completed', processed_at = CURRENT_TIMESTAMP, locked_by = NULL 
+         WHERE id = ?`,
+        [jobRecord.id]
+      );
+      this.emit('completed', jobRecord);
     } catch (err) {
-      logger.error(`[JobQueue:${this.name}] Job #${job.id} failed (attempt ${job.attempts}/${job.maxRetries}):`, err.message);
+      logger.error(`[DurableQueue:${this.name}] Job #${jobRecord.id} failed (attempt ${jobRecord.attempts}/${jobRecord.max_retries}):`, err.message);
 
-      if (job.attempts < job.maxRetries) {
-        const backoffMs = this.initialBackoffMs * Math.pow(2, job.attempts - 1);
-        setTimeout(() => {
-          this.queue.push(job);
-          this._drain();
-        }, backoffMs);
+      if (jobRecord.attempts < jobRecord.max_retries) {
+        const backoffSec = Math.min(Math.pow(2, jobRecord.attempts - 1), 60);
+        await dbRun(
+          `UPDATE durable_job_queue 
+           SET status = 'pending', 
+               locked_by = NULL,
+               last_error = ?,
+               scheduled_at = datetime('now', '+' || ? || ' seconds')
+           WHERE id = ?`,
+          [String(err.message).substring(0, 500), backoffSec, jobRecord.id]
+        );
       } else {
-        job.failedReason = err.message;
-        job.failedAt = new Date().toISOString();
-        this.dlq.push(job);
-        this.emit('failed', job, err);
-        logger.error(`[JobQueue:${this.name}] Job #${job.id} moved to Dead-Letter Queue (DLQ).`);
+        await dbRun(
+          `UPDATE durable_job_queue 
+           SET status = 'dlq', 
+               last_error = ?, 
+               locked_by = NULL, 
+               processed_at = CURRENT_TIMESTAMP 
+           WHERE id = ?`,
+          [String(err.message).substring(0, 500), jobRecord.id]
+        );
+        this.emit('failed', jobRecord, err);
       }
     } finally {
       this.runningCount--;
@@ -123,14 +203,27 @@ export class JobQueue extends EventEmitter {
     }
   }
 
-  getStats() {
-    return {
-      name: this.name,
-      queued: this.queue.length,
-      running: this.runningCount,
-      dlq: this.dlq.length,
-      isPaused: this.isPaused,
-    };
+  async getStats() {
+    try {
+      const stats = await dbAll(
+        `SELECT status, COUNT(*) as count FROM durable_job_queue WHERE queue_name = ? GROUP BY status`,
+        [this.name]
+      );
+      const counts = { pending: 0, processing: 0, completed: 0, dlq: 0 };
+      for (const row of stats || []) {
+        counts[row.status] = row.count;
+      }
+      return {
+        name: this.name,
+        queued: counts.pending,
+        running: counts.processing,
+        completed: counts.completed,
+        dlq: counts.dlq,
+        isPaused: this.isPaused,
+      };
+    } catch {
+      return { name: this.name, queued: 0, running: 0, completed: 0, dlq: 0, isPaused: this.isPaused };
+    }
   }
 
   pause() {
@@ -142,8 +235,7 @@ export class JobQueue extends EventEmitter {
     this._drain();
   }
 
-  clear() {
-    this.queue = [];
-    this.dlq = [];
+  destroy() {
+    if (this.drainTimer) clearInterval(this.drainTimer);
   }
 }
