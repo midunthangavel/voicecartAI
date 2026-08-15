@@ -4,12 +4,16 @@ import { AppError } from '../utils/AppError.js';
 
 /**
  * Controller for Restaurant Menu Catalog and Categories
- * Scoped strictly by server-side authenticated identity or explicit query parameters.
+ * Scoped strictly by server-side authenticated identity or explicit query parameters (Zero Fallback).
  */
 
 function resolveTenantContext(req) {
-  const tenantId = req.auth?.tenantId || req.query?.tenant_id || req.headers['x-tenant-id'] || 't_annapoorna';
-  const restaurantId = req.auth?.restaurantId || req.query?.restaurant_id || req.headers['x-restaurant-id'] || 'r_coimbatore_01';
+  const tenantId = req.auth?.tenantId || req.query?.tenant_id || req.headers['x-tenant-id'];
+  const restaurantId = req.auth?.restaurantId || req.query?.restaurant_id || req.headers['x-restaurant-id'];
+
+  if (!tenantId || !restaurantId) {
+    throw new AppError(400, 'TENANT_REQUIRED', 'tenant_id and restaurant_id query parameters or auth context are required');
+  }
 
   return { tenantId, restaurantId };
 }
@@ -79,7 +83,10 @@ export async function addCatalogItem(req, res, next) {
 
 export async function getMerchants(req, res, next) {
   try {
-    const tenantId = req.auth?.tenantId || req.query?.tenant_id || 't_annapoorna';
+    const tenantId = req.auth?.tenantId || req.query?.tenant_id || req.headers['x-tenant-id'];
+    if (!tenantId) {
+      throw new AppError(400, 'TENANT_REQUIRED', 'tenant_id query parameter or auth context is required');
+    }
     const rows = await dbAll('SELECT * FROM restaurants WHERE tenant_id = ? AND status = "active"', [tenantId]);
     res.json(rows);
   } catch (err) {

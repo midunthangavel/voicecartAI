@@ -34,32 +34,50 @@ protectedApi.get('/queues', requireRole(ROLES.RESTAURANT_MANAGER, ROLES.ADMIN), 
 // Operational Dashboard Stats & Active Sessions
 protectedApi.get('/stats', getStats);
 protectedApi.get('/engine-status', getEngineStatus);
-protectedApi.get('/sessions', requireRole(ROLES.STAFF, ROLES.RESTAURANT_MANAGER, ROLES.ADMIN), (req, res) => {
-  const active = [];
-  const reqTenantId = req.auth?.tenantId;
-  const reqRestaurantId = req.auth?.restaurantId;
+import { listActiveSessions } from '../infra/sessionStore.js';
 
-  for (const [id, session] of sessions) {
-    if (session.tenantId && reqTenantId && session.tenantId !== reqTenantId) {
-      continue;
-    }
-    if (req.auth?.role !== 'ADMIN' && session.restaurantId && reqRestaurantId && session.restaurantId !== reqRestaurantId) {
-      continue;
+protectedApi.get('/sessions', requireRole(ROLES.STAFF, ROLES.RESTAURANT_MANAGER, ROLES.ADMIN), async (req, res, next) => {
+  try {
+    const reqTenantId = req.auth?.tenantId;
+    const reqRestaurantId = req.auth?.restaurantId;
+    const activeMap = new Map();
+
+    // 1. Get cluster-wide active sessions from distributed Redis store
+    const clusterSessions = await listActiveSessions(reqTenantId, req.auth?.role === 'ADMIN' ? null : reqRestaurantId);
+    for (const s of clusterSessions) {
+      activeMap.set(s.id, {
+        id: s.id,
+        caller_phone: s.callerPhone || 'Browser',
+        source: s.source,
+        state: s.state,
+        tenantId: s.tenantId,
+        restaurantId: s.restaurantId,
+        startedAt: s.createdAt,
+      });
     }
 
-    active.push({
-      id,
-      caller_phone: session.callerPhone || 'Browser',
-      source: session.source,
-      state: session.state,
-      transcript: session.conversationHistory,
-      startedAt: session.startedAt,
-      latencies: session.latencies,
-      tenantId: session.tenantId,
-      restaurantId: session.restaurantId,
-    });
+    // 2. Augment with local real-time audio sessions
+    for (const [id, session] of sessions) {
+      if (session.tenantId && reqTenantId && session.tenantId !== reqTenantId) continue;
+      if (req.auth?.role !== 'ADMIN' && session.restaurantId && reqRestaurantId && session.restaurantId !== reqRestaurantId) continue;
+
+      activeMap.set(id, {
+        id,
+        caller_phone: session.callerPhone || 'Browser',
+        source: session.source,
+        state: session.state,
+        transcript: session.conversationHistory,
+        startedAt: session.startedAt,
+        latencies: session.latencies,
+        tenantId: session.tenantId,
+        restaurantId: session.restaurantId,
+      });
+    }
+
+    res.json(Array.from(activeMap.values()));
+  } catch (err) {
+    next(err);
   }
-  res.json(active);
 });
 
 // Calls & Recordings (Staff, Managers, Admin)

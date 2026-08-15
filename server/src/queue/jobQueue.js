@@ -9,7 +9,7 @@ const WORKER_INSTANCE_ID = `worker_${process.pid}_${Math.random().toString(36).s
  * 
  * Guarantees zero-lost jobs across process crashes, restarts, and multi-worker scale.
  * Persists all jobs to SQLite/PostgreSQL with atomic worker claiming, automatic
- * crashed-worker recovery, exponential backoff, and dead-letter queue (DLQ) tracking.
+ * crashed-worker recovery, exponential backoff, and strict Dead-Letter Queue (DLQ) routing.
  */
 export class JobQueue extends EventEmitter {
   constructor(name, options = {}) {
@@ -31,14 +31,13 @@ export class JobQueue extends EventEmitter {
   }
 
   /**
-   * Register a worker processor for a specific job name/type
+   * Register an explicit worker processor for a specific job type (No generic fallback)
    */
   process(jobType, handler) {
-    if (typeof jobType === 'function' && !handler) {
-      this.processors.set('__default__', jobType);
-    } else {
-      this.processors.set(jobType, handler);
+    if (typeof jobType !== 'string' || typeof handler !== 'function') {
+      throw new Error(`[JobQueue:${this.name}] process requires an explicit jobType string and handler function`);
     }
+    this.processors.set(jobType, handler);
     setImmediate(() => this._drain());
   }
 
@@ -46,14 +45,11 @@ export class JobQueue extends EventEmitter {
    * Add a job to the durable database-backed queue
    */
   async add(jobType, data = {}, options = {}) {
-    let type = jobType;
-    let payload = data;
-
-    if (typeof jobType === 'object' && !data.type) {
-      payload = jobType;
-      type = payload.type || '__default__';
+    if (typeof jobType !== 'string') {
+      throw new Error(`[JobQueue:${this.name}] add requires an explicit jobType string`);
     }
 
+    const payload = data;
     const payloadStr = typeof payload === 'string' ? payload : JSON.stringify(payload);
     const maxRetries = options.maxRetries || this.maxRetries;
 
@@ -61,13 +57,13 @@ export class JobQueue extends EventEmitter {
       `INSERT INTO durable_job_queue (
          queue_name, job_type, payload, max_retries, status, scheduled_at
        ) VALUES (?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP)`,
-      [this.name, type, payloadStr, maxRetries]
+      [this.name, jobType, payloadStr, maxRetries]
     );
 
     const job = {
       id: res.lastID,
       queue: this.name,
-      type,
+      type: jobType,
       data: payload,
       attempts: 0,
       maxRetries,
@@ -82,7 +78,10 @@ export class JobQueue extends EventEmitter {
    * Enqueue alias for compatibility
    */
   async enqueue(data = {}, options = {}) {
-    const type = data.type || '__default__';
+    const type = data.type;
+    if (!type) {
+      throw new Error(`[JobQueue:${this.name}] enqueue requires data.type to be specified`);
+    }
     return this.add(type, data, options);
   }
 
@@ -150,7 +149,7 @@ export class JobQueue extends EventEmitter {
 
     this.runningCount++;
 
-    const processor = this.processors.get(jobRecord.job_type) || this.processors.get('__default__');
+    const processor = this.processors.get(jobRecord.job_type);
 
     if (!processor) {
       const errMessage = `Unsupported job type: "${jobRecord.job_type}" has no registered processor on queue "${this.name}"`;
@@ -187,8 +186,8 @@ export class JobQueue extends EventEmitter {
         await dbRun(
           `UPDATE durable_job_queue 
            SET status = 'pending', 
-               locked_by = NULL,
-               last_error = ?,
+               locked_by = NULL, 
+               last_error = ?, 
                scheduled_at = datetime('now', '+' || ? || ' seconds')
            WHERE id = ?`,
           [String(err.message).substring(0, 500), backoffSec, jobRecord.id]

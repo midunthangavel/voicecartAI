@@ -7,14 +7,19 @@ const DEFAULT_TTL_SECONDS = 3600; // 1 hour TTL
  * Ephemeral Voice Session Store
  * 
  * Implements ultra-fast Redis-backed ephemeral voice state management
- * as specified in Phase2.pdf (Step 11, Pages 17-18).
+ * with distributed multi-instance discovery.
  */
 
 export async function createSession(sessionId, initialData = {}, ttlSeconds = DEFAULT_TTL_SECONDS) {
   const key = `${SESSION_PREFIX}${sessionId}`;
+  const tenantId = initialData.tenantId || initialData.tenant_id;
+  const restaurantId = initialData.restaurantId || initialData.restaurant_id;
+
   const payload = {
     ...initialData,
     id: sessionId,
+    tenantId,
+    restaurantId,
     createdAt: initialData.createdAt || new Date().toISOString(),
     lastActivity: new Date().toISOString(),
   };
@@ -59,18 +64,28 @@ export async function touchSession(sessionId, ttlSeconds = DEFAULT_TTL_SECONDS) 
   return await redisClient.expire(key, ttlSeconds);
 }
 
-export async function getAllActiveSessions() {
+/**
+ * List all active sessions across cluster filtered by tenant and restaurant
+ */
+export async function listActiveSessions(tenantId = null, restaurantId = null) {
   const keys = await redisClient.keys(`${SESSION_PREFIX}*`);
-  const sessions = [];
+  const active = [];
 
   for (const key of keys) {
     const raw = await redisClient.get(key);
     if (raw) {
       try {
-        sessions.push(JSON.parse(raw));
+        const session = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        const sTenant = session.tenantId || session.tenant_id;
+        const sRest = session.restaurantId || session.restaurant_id;
+
+        if (tenantId && sTenant && sTenant !== tenantId) continue;
+        if (restaurantId && sRest && sRest !== restaurantId) continue;
+
+        active.push(session);
       } catch {}
     }
   }
 
-  return sessions;
+  return active;
 }

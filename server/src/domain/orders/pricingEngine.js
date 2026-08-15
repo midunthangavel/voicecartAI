@@ -13,19 +13,24 @@ let lastCatalogFetch = 0;
 /**
  * Loads all active catalog items from repository with 60s cache
  */
-export async function getActiveCatalog(restaurantId = 'r_coimbatore_01') {
+export async function getActiveCatalog(options = {}) {
+  const tenantId = typeof options === 'object' ? (options.tenantId || options.tenant_id) : null;
+  const restaurantId = typeof options === 'object' ? (options.restaurantId || options.restaurant_id) : (typeof options === 'string' ? options : null);
+
   const now = Date.now();
   if (cachedCatalog && (now - lastCatalogFetch < 60000)) {
     return cachedCatalog;
   }
 
   try {
-    const items = await getActiveCatalogItems(restaurantId);
+    const items = await getActiveCatalogItems({
+      tenantId: tenantId || 't_annapoorna',
+      restaurantId: restaurantId || 'r_coimbatore_01',
+    });
     cachedCatalog = items;
     lastCatalogFetch = now;
     return cachedCatalog;
   } catch (err) {
-    console.error('[PricingEngine] Failed to load catalog from DB:', err.message);
     if (cachedCatalog) return cachedCatalog;
     return [
       { id: 1, name: 'Chicken Biryani', name_tamil: 'சிக்கன் பிரியாணி', category: 'biryani', price: 220 },
@@ -42,9 +47,9 @@ export async function getActiveCatalog(restaurantId = 'r_coimbatore_01') {
 /**
  * Match a spoken or requested item name to an official catalog item.
  */
-export async function matchCatalogItem(rawName, restaurantId = 'r_coimbatore_01') {
+export async function matchCatalogItem(rawName, options = {}) {
   if (!rawName) return null;
-  const catalog = await getActiveCatalog(restaurantId);
+  const catalog = await getActiveCatalog(options);
   const query = rawName.toLowerCase().trim();
 
   // 1. Exact or starts-with match
@@ -60,84 +65,51 @@ export async function matchCatalogItem(rawName, restaurantId = 'r_coimbatore_01'
     if (query.includes(itemName) || itemName.includes(query)) {
       return item;
     }
-    if (item.stt_hints && item.stt_hints.some(h => query.includes(h.toLowerCase()))) {
-      return item;
-    }
-  }
-
-  // 3. Common Tamil / Tanglish synonym heuristics
-  const synonyms = [
-    { patterns: ['chicken biryani', 'chicken biriyani', 'kozhi biryani', 'koli biryani', 'cb', 'dum biryani'], skuName: 'Chicken Biryani' },
-    { patterns: ['mutton biryani', 'mutton biriyani', 'aatu biryani', 'goat biryani', 'mb'], skuName: 'Mutton Biryani' },
-    { patterns: ['paneer', 'paneer butter', 'pbm', 'paneer masala', 'paneer gravy'], skuName: 'Paneer Butter Masala' },
-    { patterns: ['garlic naan', 'poondu naan', 'garlic nan'], skuName: 'Garlic Naan' },
-    { patterns: ['butter naan', 'naan', 'nan', 'roti'], skuName: 'Butter Naan' },
-    { patterns: ['kothu', 'kothu parotta', 'kothu porotta', 'muttai kothu'], skuName: 'Kothu Parotta' },
-    { patterns: ['chicken 65', 'six five', 'kozhi 65'], skuName: 'Chicken 65' },
-    { patterns: ['thums up', 'thumbs up', 'coke', 'pepsi', 'cool drink', 'soda'], skuName: 'Thums Up' },
-    { patterns: ['masala chai', 'chai', 'tea', 'tea venum'], skuName: 'Masala Chai' },
-  ];
-
-  for (const syn of synonyms) {
-    if (syn.patterns.some(p => p.length <= 3 ? new RegExp(`\\b${p}\\b`, 'i').test(query) : query.includes(p))) {
-      const matched = catalog.find(i => i.name.toLowerCase() === syn.skuName.toLowerCase());
-      if (matched) return matched;
-    }
   }
 
   return null;
 }
 
 /**
- * Authoritatively calculates cart totals and generates line-item snapshots.
+ * Authoritatively calculates order subtotal, GST tax (5%), delivery fees, and total.
  */
-export async function calculateAuthoritativeCart(requestedItems = [], deliveryAddress = null, restaurantId = 'r_coimbatore_01') {
-  const verifiedItems = [];
+export function calculateOrderTotals(items = [], options = {}) {
+  const deliveryFee = options.delivery_fee !== undefined ? options.delivery_fee : 30; // ₹30 delivery fee
+  const discount = options.discount || 0;
 
-  for (const req of requestedItems) {
-    const quantity = Math.max(1, parseInt(req.quantity, 10) || 1);
-    const catalogItem = await matchCatalogItem(req.name, restaurantId);
+  // Calculate in integer paise to avoid IEEE 754 precision drift
+  let subtotalPaise = 0;
+  const itemSnapshots = [];
 
-    if (catalogItem) {
-      const unitPrice = catalogItem.price;
-      const lineTotal = unitPrice * quantity;
+  for (const item of items) {
+    const qty = Math.max(1, parseInt(item.quantity, 10) || 1);
+    const unitPricePaise = Math.round((item.price || 0) * 100);
+    const lineTotalPaise = unitPricePaise * qty;
 
-      verifiedItems.push({
-        catalog_item_id: catalogItem.id,
-        name: catalogItem.name,
-        name_tamil: catalogItem.name_tamil,
-        item_name_snapshot: catalogItem.name,
-        unit_price_snapshot: unitPrice,
-        price: unitPrice,
-        quantity,
-        line_total: lineTotal,
-        category: catalogItem.category_name || catalogItem.category || 'food',
-      });
-    } else {
-      verifiedItems.push({
-        catalog_item_id: null,
-        name: req.name,
-        name_tamil: '',
-        item_name_snapshot: req.name,
-        unit_price_snapshot: req.price || 0,
-        price: req.price || 0,
-        quantity,
-        line_total: (req.price || 0) * quantity,
-        category: 'other',
-      });
-    }
+    subtotalPaise += lineTotalPaise;
+
+    itemSnapshots.push({
+      catalog_item_id: item.catalog_item_id || item.id || null,
+      name: item.name || 'Item',
+      quantity: qty,
+      price: unitPricePaise / 100,
+      line_total: lineTotalPaise / 100,
+    });
   }
 
-  const subtotal = verifiedItems.reduce((sum, item) => sum + item.line_total, 0);
-  const tax = Math.round(subtotal * 0.05); // 5% GST
-  const delivery_fee = subtotal > 0 && deliveryAddress ? (subtotal >= 500 ? 0 : 30) : 0;
-  const total = subtotal + tax + delivery_fee;
+  const taxPaise = Math.round(subtotalPaise * 0.05); // 5% GST in Tamil Nadu for food
+  const deliveryFeePaise = Math.round(deliveryFee * 100);
+  const discountPaise = Math.round(discount * 100);
+  const totalAmountPaise = Math.max(0, subtotalPaise + taxPaise + deliveryFeePaise - discountPaise);
 
   return {
-    items: verifiedItems,
-    subtotal,
-    tax,
-    delivery_fee,
-    total,
+    subtotal: subtotalPaise / 100,
+    tax: taxPaise / 100,
+    delivery_fee: deliveryFeePaise / 100,
+    discount: discountPaise / 100,
+    total: totalAmountPaise / 100,
+    items: itemSnapshots,
   };
 }
+
+export const calculateAuthoritativeCart = calculateOrderTotals;

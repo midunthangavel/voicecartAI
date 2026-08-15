@@ -10,16 +10,25 @@ import { createSession, getSession, updateSession, deleteSession } from '../infr
 import { notificationQueue, dispatchQueue, recordingQueue } from '../queue/queueManager.js';
 import { startTurnTrace, recordTurnStage, finishTurnTrace } from '../services/latencyTracer.js';
 import { logger } from '../utils/logger.js';
+import { AppError } from '../utils/AppError.js';
 import '../workers/notification.worker.js';
 import '../workers/dispatch.worker.js';
 import '../workers/recording.worker.js';
 
+const MAX_AUDIO_BYTES = 2 * 1024 * 1024; // 2MB memory cap per active call
+
 /**
  * Initialize a new voice session with Ephemeral Cache & Authoritative Tenant Context
+ * Strictly fails closed if tenant context is missing.
  */
 export async function initSession(sessionId, opts, sessions) {
-  const tenantId = opts.tenantId || 't_annapoorna';
-  const restaurantId = opts.restaurantId || 'r_coimbatore_01';
+  const tenantId = opts.tenantId;
+  const restaurantId = opts.restaurantId;
+
+  if (!tenantId || !restaurantId) {
+    throw new AppError(500, 'TENANT_CONTEXT_REQUIRED', 'Voice session requires explicit tenant and restaurant context');
+  }
+
   const state = getInitialState(opts.callerPhone);
   const sttStream = await createSttStream('en-IN');
 
@@ -39,6 +48,7 @@ export async function initSession(sessionId, opts, sessions) {
     startedAt: new Date().toISOString(),
     latencies: [],
     audioChunks: [],
+    audioBytes: 0,
   };
 
   sttStream.onTranscript(async (result) => {
@@ -75,8 +85,8 @@ export async function initSession(sessionId, opts, sessions) {
 
   try {
     const dbResult = await dbRun(
-      'INSERT INTO calls (call_sid, caller_phone, source, status, session_state) VALUES (?, ?, ?, ?, ?)',
-      [sessionId, session.callerPhone, opts.source, 'active', JSON.stringify(state)]
+      'INSERT INTO calls (call_sid, caller_phone, source, status, session_state, tenant_id, restaurant_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [sessionId, session.callerPhone, opts.source, 'active', JSON.stringify(state), session.tenantId, session.restaurantId]
     );
     session.dbId = dbResult.lastID;
   } catch (err) {
@@ -85,7 +95,7 @@ export async function initSession(sessionId, opts, sessions) {
 
   if (session.callerPhone && session.callerPhone !== 'Browser') {
     try {
-      await upsertCustomerProfile({ phone: session.callerPhone });
+      await upsertCustomerProfile({ phone: session.callerPhone, restaurant_id: session.restaurantId });
     } catch {}
   }
 
@@ -298,6 +308,7 @@ export async function handleOrderConfirmation(sessionId, sessions) {
           if (geoResult) {
             await saveCustomerAddress({
               phone: session.callerPhone,
+              restaurant_id: session.restaurantId,
               label: 'Home',
               spoken_address: session.state.delivery_address,
               landmark: session.state.landmark || null,
@@ -340,7 +351,7 @@ export async function handleOrderConfirmation(sessionId, sessions) {
     }
 
     if (session.callerPhone && session.callerPhone !== 'Browser') {
-      incrementCustomerOrders(session.callerPhone).catch(() => {});
+      incrementCustomerOrders(session.callerPhone, session.restaurantId).catch(() => {});
     }
 
     // 3. Offload Dispatch to Asynchronous Dispatch Worker
