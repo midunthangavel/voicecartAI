@@ -1,42 +1,53 @@
-import { verifyJwt } from '../services/auth.service.js';
+import { verifyToken } from '../services/auth.service.js';
+import { AppError } from '../utils/AppError.js';
 
 /**
- * JWT Authentication Middleware
+ * Authentication Middleware
  * 
- * Validates Bearer tokens on protected REST routes and attaches authenticated
- * user context (userId, tenantId, restaurantId, role) to the request object.
+ * Verifies JWT token and binds authenticated identity directly to `req.auth`.
+ * Mandatory by default across all protected routes.
  */
 export function authMiddleware(options = { required: true }) {
-  return (req, res, next) => {
+  const { required = true } = options;
+
+  return async (req, res, next) => {
+    const authHeader = req.headers.authorization;
     let token = null;
 
-    const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
-      token = authHeader.slice(7).trim();
-    } else if (req.query.token) {
-      token = req.query.token;
+      token = authHeader.substring(7).trim();
+    } else if (req.query?.access_token) {
+      token = req.query.access_token;
     }
 
     if (!token) {
-      if (options.required) {
-        return res.status(401).json({ error: 'Unauthorized: Missing or invalid token' });
+      if (required) {
+        return next(new AppError(401, 'AUTH_REQUIRED', 'Authentication required. Please provide a valid Bearer token.'));
       }
       return next();
     }
 
-    const payload = verifyJwt(token);
-    if (!payload) {
-      if (options.required) {
-        return res.status(401).json({ error: 'Unauthorized: Invalid or expired token' });
+    try {
+      const claims = await verifyToken(token);
+
+      // Server-side authoritative identity
+      req.auth = {
+        userId: claims.sub,
+        email: claims.email,
+        name: claims.name,
+        tenantId: claims.tenant_id,
+        restaurantId: claims.restaurant_id,
+        role: claims.role,
+      };
+
+      req.user = req.auth; // Compatibility alias
+      next();
+    } catch (err) {
+      if (required) {
+        return next(err);
       }
-      return next();
+      next();
     }
-
-    req.user = payload;
-    req.tenantId = payload.tenantId;
-    req.restaurantId = payload.restaurantId;
-
-    next();
   };
 }
 

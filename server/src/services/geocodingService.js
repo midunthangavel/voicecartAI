@@ -1,3 +1,6 @@
+import crypto from 'crypto';
+import { dbRun } from '../db.js';
+
 /**
  * Geocoding Service — Landmark-to-LatLng Resolver
  * 
@@ -128,13 +131,30 @@ export function needsPinDrop(confidence) {
 }
 
 /**
- * Generate a pin-drop URL for the customer to confirm their exact location
- * @param {string|number} orderId - The temporary or confirmed order ID
- * @param {number} lat - Initial latitude estimate
- * @param {number} lng - Initial longitude estimate
- * @returns {string} URL for the customer to open and tap-confirm their pin
+ * Creates a cryptographically random, single-use, time-expiring PIN drop confirmation token
  */
-export function generatePinDropUrl(orderId, lat, lng) {
+export async function createPinDropToken(orderId, phone = null, lat = 11.0168, lng = 76.9558) {
+  const token = crypto.randomBytes(24).toString('hex');
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  const expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(); // 2 hours expiration
+
+  try {
+    await dbRun(
+      `INSERT INTO pin_tokens (token_hash, order_id, phone, expires_at)
+       VALUES (?, ?, ?, ?)`,
+      [tokenHash, typeof orderId === 'number' ? orderId : parseInt(orderId, 10) || 1, phone, expiresAt]
+    );
+  } catch (err) {
+    console.warn('[PinToken] Failed to save pin token to database:', err.message);
+  }
+
+  return generatePinDropUrl(token, lat, lng);
+}
+
+/**
+ * Generate a pin-drop URL with opaque token
+ */
+export function generatePinDropUrl(tokenOrOrderId, lat = 11.0168, lng = 76.9558) {
   const baseUrl = process.env.PUBLIC_URL || `http://localhost:${process.env.PORT || 3001}`;
-  return `${baseUrl}/pin/${orderId}?lat=${lat}&lng=${lng}`;
+  return `${baseUrl}/pin/${tokenOrOrderId}?lat=${lat}&lng=${lng}`;
 }

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { apiFetch } from '../services/apiClient';
 
 const isLocal = typeof window !== 'undefined' &&
   (['localhost', '127.0.0.1'].includes(window.location.hostname) || window.location.hostname.startsWith('10.'));
@@ -22,13 +23,13 @@ export function useCatalog() {
   const fetchCatalogData = useCallback(async () => {
     try {
       setLoading(true);
-      const [itemsRes, catsRes] = await Promise.all([
-        fetch(`${apiBase}/api/catalog`),
-        fetch(`${apiBase}/api/categories`),
+      const [itemsData, catsData] = await Promise.all([
+        apiFetch(`${apiBase}/api/catalog`),
+        apiFetch(`${apiBase}/api/categories`),
       ]);
 
-      if (itemsRes.ok) setItems(await itemsRes.json());
-      if (catsRes.ok) setCategories(await catsRes.json());
+      setItems(itemsData);
+      setCategories(catsData);
       setError(null);
     } catch (err) {
       setError(err.message);
@@ -43,17 +44,12 @@ export function useCatalog() {
 
   const addItem = useCallback(async (newItem) => {
     try {
-      const res = await fetch(`${apiBase}/api/catalog`, {
+      await apiFetch(`${apiBase}/api/catalog`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newItem),
       });
-      if (res.ok) {
-        fetchCatalogData();
-        return { success: true };
-      }
-      const data = await res.json();
-      return { success: false, error: data.error || 'Failed to add item' };
+      fetchCatalogData();
+      return { success: true };
     } catch (err) {
       return { success: false, error: err.message };
     }

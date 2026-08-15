@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { apiFetch } from '../services/apiClient';
 
 const isLocal = typeof window !== 'undefined' &&
   (['localhost', '127.0.0.1'].includes(window.location.hostname) || window.location.hostname.startsWith('10.'));
@@ -19,14 +20,9 @@ export function useKds(dashboardEvents = []) {
   const fetchOrders = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await fetch(`${apiBase}/api/orders?limit=50`);
-      if (res.ok) {
-        const data = await res.json();
-        setOrders(data);
-        setError(null);
-      } else {
-        setError('Failed to fetch orders');
-      }
+      const data = await apiFetch(`${apiBase}/api/orders?limit=50`);
+      setOrders(data);
+      setError(null);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -57,16 +53,12 @@ export function useKds(dashboardEvents = []) {
     );
 
     try {
-      const res = await fetch(`${apiBase}/api/orders/${orderId}`, {
+      await apiFetch(`${apiBase}/api/orders/${orderId}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: newStatus }),
       });
-      if (!res.ok) {
-        fetchOrders(); // Revert on failure
-      }
     } catch {
-      fetchOrders();
+      fetchOrders(); // Revert on failure
     }
   }, [fetchOrders]);
 

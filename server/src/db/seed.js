@@ -1,7 +1,9 @@
+import { hashPassword } from '../services/auth.service.js';
+
 /**
  * Multi-Tenant Seed Script
  * 
- * Seeds default tenant, Coimbatore restaurant, categories, and bilingual menu items with STT phrase hints.
+ * Seeds default tenant, Coimbatore restaurant, categories, bilingual menu items, and initial staff users.
  */
 
 export async function seedDatabase(db) {
@@ -46,8 +48,8 @@ export async function seedDatabase(db) {
   for (const cat of categories) {
     await new Promise((resolve, reject) => {
       db.run(
-        `INSERT OR IGNORE INTO catalog_categories (id, restaurant_id, name, name_tamil, sort_order) 
-         VALUES (?, 'r_coimbatore_01', ?, ?, ?)`,
+        `INSERT OR IGNORE INTO catalog_categories (id, tenant_id, restaurant_id, name, name_tamil, sort_order) 
+         VALUES (?, 't_annapoorna', 'r_coimbatore_01', ?, ?, ?)`,
         [cat.id, cat.name, cat.name_tamil, cat.sort_order],
         err => err ? reject(err) : resolve()
       );
@@ -142,13 +144,32 @@ export async function seedDatabase(db) {
   for (const item of items) {
     await new Promise((resolve, reject) => {
       db.run(
-        `INSERT OR IGNORE INTO catalog_items (restaurant_id, category_id, name, name_tamil, price, is_special, dietary_tags, stt_hints) 
-         VALUES ('r_coimbatore_01', ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR IGNORE INTO catalog_items (tenant_id, restaurant_id, category_id, name, name_tamil, price, is_special, dietary_tags, stt_hints) 
+         VALUES ('t_annapoorna', 'r_coimbatore_01', ?, ?, ?, ?, ?, ?, ?)`,
         [item.category_id, item.name, item.name_tamil, item.price, item.is_special, item.dietary_tags, JSON.stringify(item.stt_hints)],
         err => err ? reject(err) : resolve()
       );
     });
   }
 
-  console.log('[Seed] Multi-tenant demo restaurant and menu seeded successfully!');
+  // 5. Seed Staff & Admin Users with secure password hashes
+  const users = [
+    { email: 'admin@annapoorna.com', name: 'Admin Manager', role: 'ADMIN', pass: 'Annapoorna@123' },
+    { email: 'kitchen@annapoorna.com', name: 'Master Chef', role: 'KITCHEN', pass: 'Kitchen@123' },
+    { email: 'staff@annapoorna.com', name: 'Front Desk Staff', role: 'STAFF', pass: 'Staff@123' },
+  ];
+
+  for (const u of users) {
+    const hashed = hashPassword(u.pass);
+    await new Promise((resolve, reject) => {
+      db.run(
+        `INSERT OR IGNORE INTO users (tenant_id, email, password_hash, name, role)
+         VALUES ('t_annapoorna', ?, ?, ?, ?)`,
+        [u.email, hashed, u.name, u.role],
+        err => err ? reject(err) : resolve()
+      );
+    });
+  }
+
+  console.log('[Seed] Multi-tenant demo restaurant, menu, and staff accounts seeded successfully!');
 }

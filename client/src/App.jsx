@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Phone, ShoppingBag, IndianRupee, Zap, Activity, TrendingUp, Smartphone } from 'lucide-react';
+import { Phone, ShoppingBag, IndianRupee, Zap, Activity, TrendingUp, Smartphone, LogIn, LogOut, ShieldCheck } from 'lucide-react';
 import Sidebar from './components/Sidebar.jsx';
 import VoiceSimulator from './components/VoiceSimulator.jsx';
 import LiveCallMonitor from './components/LiveCallMonitor.jsx';
@@ -7,11 +7,15 @@ import OrderDispatch from './components/OrderDispatch.jsx';
 import CatalogManager from './components/CatalogManager.jsx';
 import VoiceAnalytics from './components/VoiceAnalytics.jsx';
 import MobileCallView from './components/MobileCallView.jsx';
+import LoginModal from './components/LoginModal.jsx';
 import { useDashboardWs } from './hooks/useDashboardWs.js';
+import { getStoredUser, clearSession } from './services/apiClient.js';
 
 export default function App() {
   const [activeView, setActiveView] = useState('simulator');
   const [theme, setTheme] = useState(() => localStorage.getItem('voicecart_theme') || 'dark');
+  const [user, setUser] = useState(() => getStoredUser());
+  const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
 
   const { serverStatus, events, stats } = useDashboardWs();
 
@@ -21,7 +25,19 @@ export default function App() {
     localStorage.setItem('voicecart_theme', theme);
   }, [theme]);
 
+  // ── Listen for auth changes ──
+  useEffect(() => {
+    const handleAuthChange = () => setUser(getStoredUser());
+    window.addEventListener('voicecart_auth_change', handleAuthChange);
+    return () => window.removeEventListener('voicecart_auth_change', handleAuthChange);
+  }, []);
+
   const toggleTheme = () => setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
+
+  const handleLogout = () => {
+    clearSession();
+    setUser(null);
+  };
 
   const isCallRoute = typeof window !== 'undefined' && window.location.pathname.startsWith('/call');
 
@@ -64,7 +80,32 @@ export default function App() {
             </span>
           </div>
 
-          <div style={{ display: 'flex', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {user ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '4px 10px' }}>
+                <ShieldCheck size={14} color="#10b981" />
+                <span style={{ fontSize: '0.78rem', fontWeight: 600 }}>{user.name || user.email}</span>
+                <span style={{ fontSize: '0.70rem', padding: '2px 6px', borderRadius: '4px', background: 'rgba(16, 185, 129, 0.15)', color: '#10b981', fontWeight: 700 }}>
+                  {user.role}
+                </span>
+                <button
+                  onClick={handleLogout}
+                  title="Sign Out"
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', color: 'var(--text-muted)' }}
+                >
+                  <LogOut size={13} />
+                </button>
+              </div>
+            ) : (
+              <button
+                className="btn btn-sm"
+                onClick={() => setIsLoginModalOpen(true)}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem', background: '#10b981', color: '#0f1117', fontWeight: 700 }}
+              >
+                <LogIn size={14} /> Staff Sign In
+              </button>
+            )}
+
             <button
               className="btn btn-ghost btn-sm"
               onClick={() => setActiveView('mobile-call')}
@@ -105,6 +146,13 @@ export default function App() {
         {activeView === 'catalog' && <CatalogManager />}
         {activeView === 'analytics' && <VoiceAnalytics />}
       </main>
+
+      {/* Login Authentication Modal */}
+      <LoginModal
+        isOpen={isLoginModalOpen}
+        onClose={() => setIsLoginModalOpen(false)}
+        onLoginSuccess={(authedUser) => setUser(authedUser)}
+      />
     </div>
   );
 }

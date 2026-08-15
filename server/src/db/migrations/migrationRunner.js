@@ -44,6 +44,7 @@ export async function runMigrations(db) {
 
   // Safe schema upgrade for legacy MVP tables
   const orderColumns = [
+    ['tenant_id', "TEXT DEFAULT 't_annapoorna'"],
     ['restaurant_id', "TEXT DEFAULT 'r_coimbatore_01'"],
     ['customer_id', 'INTEGER'],
     ['subtotal', 'REAL DEFAULT 0'],
@@ -65,6 +66,7 @@ export async function runMigrations(db) {
   }
 
   const callColumns = [
+    ['tenant_id', "TEXT DEFAULT 't_annapoorna'"],
     ['restaurant_id', "TEXT DEFAULT 'r_coimbatore_01'"],
     ['provider', "TEXT DEFAULT 'twilio'"],
     ['provider_call_id', 'TEXT'],
@@ -88,6 +90,9 @@ export async function runMigrations(db) {
     await safeAddColumn('call_recordings', col, def);
   }
 
+  await safeAddColumn('catalog_items', 'tenant_id', "TEXT DEFAULT 't_annapoorna'");
+  await safeAddColumn('catalog_categories', 'tenant_id', "TEXT DEFAULT 't_annapoorna'");
+  await safeAddColumn('customers', 'tenant_id', "TEXT DEFAULT 't_annapoorna'");
   await safeAddColumn('customers', 'restaurant_id', "TEXT DEFAULT 'r_coimbatore_01'");
   await safeAddColumn('customer_addresses', 'customer_id', 'INTEGER');
 

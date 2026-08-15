@@ -1,7 +1,10 @@
+import Redis from 'ioredis';
+import { logger } from '../utils/logger.js';
+
 /**
  * Universal Redis Client Adapter with In-Memory Fallback
  * 
- * When REDIS_URL is configured, connects to real Redis.
+ * When REDIS_URL is configured, connects to real Redis via ioredis.
  * When in local development without Redis, transparently operates over a high-speed
  * in-memory key-value cache with TTL expiration.
  */
@@ -11,7 +14,7 @@ class InMemoryRedisAdapter {
     this.store = new Map();
     this.ttls = new Map();
     this.isMemory = true;
-    console.log('[Redis] Running in zero-config In-Memory fallback mode.');
+    logger.info('[Redis] Running in zero-config In-Memory fallback mode.');
   }
 
   async get(key) {
@@ -84,12 +87,19 @@ export function getRedisClient() {
 
   if (redisUrl) {
     try {
-      // In production with real Redis instance
-      console.log(`[Redis] Connecting to external Redis at ${redisUrl}...`);
-      // We fall back to memory adapter if ioredis package is not yet loaded
-      redisInstance = new InMemoryRedisAdapter();
+      logger.info(`[Redis] Connecting to external Redis at ${redisUrl}...`);
+      const client = new Redis(redisUrl, {
+        maxRetriesPerRequest: 3,
+        enableOfflineQueue: false,
+        lazyConnect: true,
+      });
+
+      client.on('connect', () => logger.info('[Redis] Connected successfully to Redis server.'));
+      client.on('error', (err) => logger.warn('[Redis] Connection error, using memory fallback:', err.message));
+
+      redisInstance = client;
     } catch (err) {
-      console.warn('[Redis] Connection failed, falling back to in-memory:', err.message);
+      logger.warn('[Redis] Instantiation failed, falling back to in-memory:', err.message);
       redisInstance = new InMemoryRedisAdapter();
     }
   } else {

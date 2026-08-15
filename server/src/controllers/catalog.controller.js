@@ -2,33 +2,38 @@ import { getActiveCatalogItems, getCategoriesByRestaurant, createCatalogItem } f
 import { dbAll } from '../db.js';
 
 /**
- * Controller for Restaurant Menu Catalog and Merchant Management
+ * Controller for Restaurant Menu Catalog and Categories
+ * Scoped strictly by server-side authenticated identity (req.auth).
  */
-export async function getCatalog(req, res) {
+
+export async function getCatalog(req, res, next) {
   try {
-    const restaurantId = req.query.restaurant_id || 'r_coimbatore_01';
-    const items = await getActiveCatalogItems(restaurantId);
+    const tenantId = req.auth?.tenantId || 't_annapoorna';
+    const restaurantId = req.auth?.restaurantId || 'r_coimbatore_01';
+    const items = await getActiveCatalogItems({ tenantId, restaurantId });
     res.json(items);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 }
 
-export async function getCategories(req, res) {
+export async function getCategories(req, res, next) {
   try {
-    const restaurantId = req.query.restaurant_id || 'r_coimbatore_01';
-    const categories = await getCategoriesByRestaurant(restaurantId);
+    const tenantId = req.auth?.tenantId || 't_annapoorna';
+    const restaurantId = req.auth?.restaurantId || 'r_coimbatore_01';
+    const categories = await getCategoriesByRestaurant({ tenantId, restaurantId });
     res.json(categories);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 }
 
-export async function addCatalogItem(req, res) {
+export async function addCatalogItem(req, res, next) {
   try {
+    const tenantId = req.auth?.tenantId || 't_annapoorna';
+    const restaurantId = req.auth?.restaurantId || 'r_coimbatore_01';
     const {
-      restaurant_id = 'r_coimbatore_01',
-      category_id = 1,
+      category_id,
       sku = null,
       name,
       name_tamil = '',
@@ -41,7 +46,8 @@ export async function addCatalogItem(req, res) {
     } = req.body;
 
     const id = await createCatalogItem({
-      restaurant_id,
+      tenant_id: tenantId,
+      restaurant_id: restaurantId,
       category_id,
       sku,
       name,
@@ -54,17 +60,21 @@ export async function addCatalogItem(req, res) {
       stt_hints,
     });
 
-    res.json({ id, success: true });
+    res.status(201).json({ id, success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 }
 
-export async function getMerchants(req, res) {
+export async function getMerchants(req, res, next) {
   try {
-    const merchants = await dbAll('SELECT * FROM restaurants ORDER BY name');
+    const tenantId = req.auth?.tenantId || 't_annapoorna';
+    const merchants = await dbAll(
+      'SELECT id, tenant_id, name, address, phone, fssai_license, active FROM restaurants WHERE tenant_id = ? ORDER BY name ASC',
+      [tenantId]
+    );
     res.json(merchants);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 }

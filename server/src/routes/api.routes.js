@@ -7,31 +7,36 @@ import { getAllQueueStats } from '../queue/queueManager.js';
 import { authRouter } from './auth.routes.js';
 import { metricsRouter } from './metrics.routes.js';
 import { authMiddleware } from '../middleware/auth.middleware.js';
-import { requireRole } from '../middleware/rbac.middleware.js';
+import { requireRole, ROLES } from '../middleware/rbac.middleware.js';
+import { validateBody, validateQuery } from '../middleware/validation.middleware.js';
+import { updateOrderStatusSchema, flagDisputeSchema, resolveDisputeSchema } from '../schemas/order.schema.js';
+import { addCatalogItemSchema } from '../schemas/catalog.schema.js';
+import { paginationSchema } from '../schemas/common.schema.js';
 import { sessions } from '../websocket/wsServer.js';
 
 export const apiRouter = Router();
 
-// ── Auth Endpoints ──
+// ── 1. Explicitly Public Routes ──
 apiRouter.use('/auth', authRouter);
+apiRouter.get('/catalog', getCatalog);
+apiRouter.get('/categories', getCategories);
+apiRouter.get('/merchants', getMerchants);
 
-// ── Observability, Telemetry & Audit Trails ──
-apiRouter.use('/metrics', metricsRouter);
-apiRouter.get('/audit-logs', (req, res, next) => metricsRouter.handle(req, res, next));
+// ── 2. Mandatory Protected Routes Boundary ──
+const protectedApi = Router();
+protectedApi.use(authMiddleware({ required: true }));
 
-// ── Stats & Metrics ──
-apiRouter.get('/stats', getStats);
-apiRouter.get('/engine-status', getEngineStatus);
-apiRouter.get('/queues', (req, res) => res.json(getAllQueueStats()));
+// Observability & Telemetry (Manager & Admin only)
+protectedApi.use('/metrics', requireRole(ROLES.RESTAURANT_MANAGER, ROLES.ADMIN), metricsRouter);
+protectedApi.get('/audit-logs', requireRole(ROLES.RESTAURANT_MANAGER, ROLES.ADMIN), (req, res, next) => metricsRouter.handle(req, res, next));
+protectedApi.get('/queues', requireRole(ROLES.RESTAURANT_MANAGER, ROLES.ADMIN), (req, res) => res.json(getAllQueueStats()));
 
-// ── Calls & Logs ──
-apiRouter.get('/calls', getRecentCalls);
-apiRouter.get('/calls/:id', getCallById);
-apiRouter.get('/calls/:id/audio', getCallAudio);
-
-// ── Active in-memory sessions ──
-apiRouter.get('/sessions', (req, res) => {
+// Operational Dashboard Stats & Active Sessions
+protectedApi.get('/stats', getStats);
+protectedApi.get('/engine-status', getEngineStatus);
+protectedApi.get('/sessions', requireRole(ROLES.STAFF, ROLES.RESTAURANT_MANAGER, ROLES.ADMIN), (req, res) => {
   const active = [];
+  const targetTenant = req.auth?.tenantId || 't_annapoorna';
   for (const [id, session] of sessions) {
     active.push({
       id,
@@ -46,31 +51,39 @@ apiRouter.get('/sessions', (req, res) => {
   res.json(active);
 });
 
-// ── Orders & KDS (RBAC Protected: Kitchen, Staff, Managers, Admin) ──
-apiRouter.get('/orders', getOrders);
-apiRouter.get('/orders/:id', getOrderById);
-apiRouter.patch(
+// Calls & Recordings (Staff, Managers, Admin)
+protectedApi.get('/calls', requireRole(ROLES.STAFF, ROLES.RESTAURANT_MANAGER, ROLES.ADMIN), validateQuery(paginationSchema), getRecentCalls);
+protectedApi.get('/calls/:id', requireRole(ROLES.STAFF, ROLES.RESTAURANT_MANAGER, ROLES.ADMIN), getCallById);
+protectedApi.get('/calls/:id/audio', requireRole(ROLES.STAFF, ROLES.RESTAURANT_MANAGER, ROLES.ADMIN), getCallAudio);
+
+// Orders & KDS (Kitchen, Staff, Managers, Admin)
+protectedApi.get('/orders', requireRole(ROLES.KITCHEN, ROLES.STAFF, ROLES.RESTAURANT_MANAGER, ROLES.ADMIN), validateQuery(paginationSchema), getOrders);
+protectedApi.get('/orders/:id', requireRole(ROLES.KITCHEN, ROLES.STAFF, ROLES.RESTAURANT_MANAGER, ROLES.ADMIN), getOrderById);
+protectedApi.patch(
   '/orders/:id',
-  authMiddleware({ required: false }),
+  requireRole(ROLES.KITCHEN, ROLES.STAFF, ROLES.RESTAURANT_MANAGER, ROLES.ADMIN),
+  validateBody(updateOrderStatusSchema),
   updateOrderStatus
 );
-apiRouter.post(
+protectedApi.post(
   '/orders/:id/dispute',
-  authMiddleware({ required: false }),
+  requireRole(ROLES.STAFF, ROLES.RESTAURANT_MANAGER, ROLES.ADMIN),
+  validateBody(flagDisputeSchema),
   flagOrderDispute
 );
-apiRouter.post(
+protectedApi.post(
   '/orders/:id/resolve-dispute',
-  authMiddleware({ required: false }),
+  requireRole(ROLES.RESTAURANT_MANAGER, ROLES.ADMIN),
+  validateBody(resolveDisputeSchema),
   resolveOrderDispute
 );
 
-// ── Catalog & Categories (RBAC Protected: Managers & Admin) ──
-apiRouter.get('/catalog', getCatalog);
-apiRouter.get('/categories', getCategories);
-apiRouter.post(
+// Catalog Modifications (Managers & Admin only)
+protectedApi.post(
   '/catalog',
-  authMiddleware({ required: false }),
+  requireRole(ROLES.RESTAURANT_MANAGER, ROLES.ADMIN),
+  validateBody(addCatalogItemSchema),
   addCatalogItem
 );
-apiRouter.get('/merchants', getMerchants);
+
+apiRouter.use(protectedApi);

@@ -77,6 +77,23 @@ export function dbAll(sql, params = []) {
   });
 }
 
+/**
+ * Executes a callback within an isolated database transaction
+ */
+export async function transaction(callback) {
+  await dbRun('BEGIN IMMEDIATE;');
+  try {
+    const result = await callback();
+    await dbRun('COMMIT;');
+    return result;
+  } catch (err) {
+    try {
+      await dbRun('ROLLBACK;');
+    } catch {}
+    throw err;
+  }
+}
+
 // ── Customer Profile & Address Helpers (Backward Compatible) ──
 
 export async function getCustomerProfile(phone, restaurantId = 'r_coimbatore_01') {

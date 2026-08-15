@@ -1,20 +1,14 @@
 import { authenticateUser } from '../services/auth.service.js';
+import { AppError } from '../utils/AppError.js';
 
 /**
  * Controller for Multi-Tenant User Authentication
  */
 
-export async function login(req, res) {
+export async function login(req, res, next) {
   try {
     const { email, password } = req.body;
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password are required' });
-    }
-
     const authResult = await authenticateUser(email, password);
-    if (!authResult) {
-      return res.status(401).json({ error: 'Invalid email or password' });
-    }
 
     res.json({
       success: true,
@@ -22,19 +16,20 @@ export async function login(req, res) {
       user: authResult.user,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 }
 
-export async function getMe(req, res) {
+export async function getMe(req, res, next) {
   try {
-    if (!req.user) {
-      return res.status(401).json({ error: 'Not authenticated' });
+    const user = req.auth || req.user;
+    if (!user) {
+      return next(new AppError(401, 'AUTH_REQUIRED', 'Not authenticated'));
     }
     res.json({
-      user: req.user,
+      user,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 }

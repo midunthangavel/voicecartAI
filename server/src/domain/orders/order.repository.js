@@ -1,12 +1,16 @@
-import { dbAll, dbGet, dbRun } from '../../db.js';
+import { dbAll, dbGet, dbRun, transaction } from '../../db.js';
 import { recordAuditLog } from '../../services/audit.service.js';
+import { transitionOrder, ORDER_ACTIONS } from './orderStateMachine.js';
+import { AppError } from '../../utils/AppError.js';
 
 /**
  * Order Repository — Authoritative persistence for orders and line-item snapshots
+ * Enforces strict multi-tenant scoping (tenant_id + restaurant_id) and database transactions.
  */
 
 export async function createOrderWithSnapshots(orderData, items = []) {
   const {
+    tenant_id = 't_annapoorna',
     restaurant_id = 'r_coimbatore_01',
     call_id = null,
     customer_id = null,
@@ -25,76 +29,93 @@ export async function createOrderWithSnapshots(orderData, items = []) {
     scheduled_for = null,
   } = orderData;
 
-  // 1. Insert master order record
-  const res = await dbRun(
-    `INSERT INTO orders (
-       restaurant_id, call_id, customer_id, ondc_order_id, status,
-       subtotal, tax, delivery_fee, discount, total_amount, currency,
-       payment_status, payment_link, delivery_address, landmark, items, scheduled_for
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      restaurant_id,
-      call_id,
-      customer_id,
-      ondc_order_id,
-      status,
-      subtotal,
-      tax,
-      delivery_fee,
-      discount,
-      total_amount,
-      currency,
-      payment_status,
-      payment_link,
-      delivery_address,
-      landmark,
-      JSON.stringify(items),
-      scheduled_for,
-    ]
-  );
-
-  const orderId = res.lastID;
-
-  // 2. Insert line-item snapshots
-  for (const item of items) {
-    const qty = Math.max(1, item.quantity || 1);
-    const unitPrice = item.unit_price_snapshot || item.price || 0;
-    const lineTotal = item.line_total || (unitPrice * qty);
-
-    await dbRun(
-      `INSERT INTO order_items (
-         order_id, catalog_item_id, item_name_snapshot, unit_price_snapshot, quantity, line_total
-       ) VALUES (?, ?, ?, ?, ?, ?)`,
+  return transaction(async () => {
+    // 1. Insert master order record
+    const res = await dbRun(
+      `INSERT INTO orders (
+         tenant_id, restaurant_id, call_id, customer_id, ondc_order_id, status,
+         subtotal, tax, delivery_fee, discount, total_amount, currency,
+         payment_status, payment_link, delivery_address, landmark, items, scheduled_for
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        orderId,
-        item.catalog_item_id || null,
-        item.name || item.item_name_snapshot || 'Item',
-        unitPrice,
-        qty,
-        lineTotal,
+        tenant_id,
+        restaurant_id,
+        call_id,
+        customer_id,
+        ondc_order_id,
+        status,
+        subtotal,
+        tax,
+        delivery_fee,
+        discount,
+        total_amount,
+        currency,
+        payment_status,
+        payment_link,
+        delivery_address,
+        landmark,
+        JSON.stringify(items),
+        scheduled_for,
       ]
     );
-  }
 
-  // 3. Record Immutable Audit Log
-  recordAuditLog({
-    tenant_id: 't_annapoorna',
-    restaurant_id,
-    actor_type: 'ai_agent',
-    actor_id: 'voicecart_dialogue_engine',
-    action: 'CREATE_ORDER',
-    resource_type: 'order',
-    resource_id: orderId,
-    after_state: { orderId, status, total_amount, itemsCount: items.length },
-  }).catch(() => {});
+    const orderId = res.lastID;
 
-  return orderId;
+    // 2. Insert line-item snapshots
+    for (const item of items) {
+      const qty = Math.max(1, item.quantity || 1);
+      const unitPrice = item.unit_price_snapshot || item.price || 0;
+      const lineTotal = item.line_total || (unitPrice * qty);
+
+      await dbRun(
+        `INSERT INTO order_items (
+           order_id, catalog_item_id, item_name_snapshot, unit_price_snapshot, quantity, line_total
+         ) VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          orderId,
+          item.catalog_item_id || null,
+          item.name || item.item_name_snapshot || 'Item',
+          unitPrice,
+          qty,
+          lineTotal,
+        ]
+      );
+    }
+
+    // 3. Record Immutable Audit Log within transaction
+    await recordAuditLog({
+      tenant_id,
+      restaurant_id,
+      actor_type: 'ai_agent',
+      actor_id: 'voicecart_dialogue_engine',
+      action: 'CREATE_ORDER',
+      resource_type: 'order',
+      resource_id: orderId,
+      after_state: { orderId, status, total_amount, itemsCount: items.length },
+    });
+
+    return orderId;
+  });
 }
 
-export async function getRecentOrders(restaurantId = 'r_coimbatore_01', limit = 50) {
+export async function getRecentOrders(options = {}) {
+  // Support both legacy signature (restaurantId, limit) and structured object options
+  let tenantId = 't_annapoorna';
+  let restaurantId = 'r_coimbatore_01';
+  let limit = 50;
+
+  if (typeof options === 'string') {
+    restaurantId = options;
+    limit = arguments[1] || 50;
+  } else {
+    tenantId = options.tenantId || 't_annapoorna';
+    restaurantId = options.restaurantId || 'r_coimbatore_01';
+    limit = Math.min(Math.max(parseInt(options.limit, 10) || 50, 1), 100);
+  }
+
   const orders = await dbAll(
-    'SELECT * FROM orders WHERE restaurant_id = ? ORDER BY created_at DESC LIMIT ?',
-    [restaurantId, limit]
+    'SELECT * FROM orders WHERE tenant_id = ? AND restaurant_id = ? ORDER BY created_at DESC LIMIT ?',
+    [tenantId, restaurantId, limit]
   );
 
   const orderIds = orders.map(o => o.id);
@@ -125,10 +146,13 @@ export async function getRecentOrders(restaurantId = 'r_coimbatore_01', limit = 
   }));
 }
 
-export async function getOrderWithItems(orderId, restaurantId = 'r_coimbatore_01') {
+export async function getOrderWithItems(orderId, options = {}) {
+  const tenantId = typeof options === 'object' ? (options.tenantId || 't_annapoorna') : 't_annapoorna';
+  const restaurantId = typeof options === 'string' ? options : (options.restaurantId || 'r_coimbatore_01');
+
   const order = await dbGet(
-    'SELECT * FROM orders WHERE id = ? AND restaurant_id = ?',
-    [orderId, restaurantId]
+    'SELECT * FROM orders WHERE id = ? AND tenant_id = ? AND restaurant_id = ?',
+    [orderId, tenantId, restaurantId]
   );
   if (!order) return null;
 
@@ -149,26 +173,38 @@ export async function getOrderWithItems(orderId, restaurantId = 'r_coimbatore_01
   };
 }
 
-export async function updateOrderStatus(orderId, status, restaurantId = 'r_coimbatore_01', actor = { type: 'staff', id: 'system' }) {
-  const previous = await dbGet('SELECT status FROM orders WHERE id = ?', [orderId]);
+export async function updateOrderStatus(orderId, newStatus, options = {}, actor = { type: 'staff', id: 'system' }) {
+  const tenantId = typeof options === 'object' ? (options.tenantId || 't_annapoorna') : 't_annapoorna';
+  const restaurantId = typeof options === 'string' ? options : (options.restaurantId || 'r_coimbatore_01');
 
-  const res = await dbRun(
-    'UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND restaurant_id = ?',
-    [status, orderId, restaurantId]
+  const previous = await dbGet(
+    'SELECT * FROM orders WHERE id = ? AND tenant_id = ? AND restaurant_id = ?',
+    [orderId, tenantId, restaurantId]
   );
 
-  // Record State Transition Audit
-  recordAuditLog({
-    tenant_id: 't_annapoorna',
-    restaurant_id: restaurantId,
-    actor_type: actor.type || 'staff',
-    actor_id: actor.id || 'system',
-    action: 'UPDATE_STATUS',
-    resource_type: 'order',
-    resource_id: orderId,
-    before_state: { status: previous?.status || 'unknown' },
-    after_state: { status },
-  }).catch(() => {});
+  if (!previous) {
+    throw new AppError(404, 'ORDER_NOT_FOUND', `Order #${orderId} not found for this restaurant`);
+  }
 
-  return res;
+  return transaction(async () => {
+    const res = await dbRun(
+      'UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND tenant_id = ? AND restaurant_id = ?',
+      [newStatus, orderId, tenantId, restaurantId]
+    );
+
+    // Record State Transition Audit within transaction
+    await recordAuditLog({
+      tenant_id: tenantId,
+      restaurant_id: restaurantId,
+      actor_type: actor.type || 'staff',
+      actor_id: actor.id || 'system',
+      action: 'UPDATE_STATUS',
+      resource_type: 'order',
+      resource_id: orderId,
+      before_state: { status: previous.status },
+      after_state: { status: newStatus },
+    });
+
+    return res;
+  });
 }

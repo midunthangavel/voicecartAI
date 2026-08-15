@@ -1,141 +1,130 @@
 import crypto from 'crypto';
+import { SignJWT, jwtVerify } from 'jose';
+import { dbGet, dbRun } from '../db.js';
+import { logger } from '../utils/logger.js';
+import { AppError } from '../utils/AppError.js';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'voicecart_production_jwt_secret_coimbatore_2026';
-const TOKEN_EXPIRY_SECONDS = 86400; // 24 hours
+// Enforce strong JWT secret configuration
+const JWT_SECRET_STRING = process.env.JWT_SECRET ||
+  (process.env.NODE_ENV !== 'production'
+    ? 'voicecart_development_jwt_secret_coimbatore_2026_minimum_32_characters'
+    : null);
 
-// Pre-seeded demo user accounts for multi-tenant testing
-const DEMO_USERS = [
-  {
-    id: 'u_admin_01',
-    tenant_id: 't_annapoorna',
-    restaurant_id: 'r_coimbatore_01',
-    email: 'admin@annapoorna.com',
-    password_hash: hashPassword('Annapoorna@123'),
-    name: 'Annapoorna Admin',
-    role: 'ADMIN',
-  },
-  {
-    id: 'u_manager_01',
-    tenant_id: 't_annapoorna',
-    restaurant_id: 'r_coimbatore_01',
-    email: 'manager@annapoorna.com',
-    password_hash: hashPassword('Manager@123'),
-    name: 'RS Puram Branch Manager',
-    role: 'RESTAURANT_MANAGER',
-  },
-  {
-    id: 'u_kitchen_01',
-    tenant_id: 't_annapoorna',
-    restaurant_id: 'r_coimbatore_01',
-    email: 'kitchen@annapoorna.com',
-    password_hash: hashPassword('Kitchen@123'),
-    name: 'RS Puram KDS Station',
-    role: 'KITCHEN',
-  },
-  {
-    id: 'u_staff_01',
-    tenant_id: 't_annapoorna',
-    restaurant_id: 'r_coimbatore_01',
-    email: 'staff@annapoorna.com',
-    password_hash: hashPassword('Staff@123'),
-    name: 'Front Desk Staff',
-    role: 'STAFF',
-  },
-];
-
-/**
- * Hash password with salt
- */
-export function hashPassword(password, salt = 'vc_salt_2026') {
-  return crypto.pbkdf2Sync(password, salt, 1000, 32, 'sha256').toString('hex');
+if (!JWT_SECRET_STRING || JWT_SECRET_STRING.length < 32) {
+  throw new Error('[Security Error] JWT_SECRET must be configured in environment with at least 32 characters.');
 }
 
+const JWT_KEY = new TextEncoder().encode(JWT_SECRET_STRING);
+const JWT_ISSUER = 'voicecart-api';
+const JWT_AUDIENCE = 'voicecart-dashboard';
+
 /**
- * Generate HMAC-SHA256 signed JWT token
+ * Secure Password Hashing with individual random salts and 100,000 PBKDF2 iterations
  */
-export function generateJwt(payload, secret = JWT_SECRET, expiresIn = TOKEN_EXPIRY_SECONDS) {
-  const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
-  const now = Math.floor(Date.now() / 1000);
-  const body = Buffer.from(JSON.stringify({ ...payload, iat: now, exp: now + expiresIn })).toString('base64url');
-
-  const signature = crypto
-    .createHmac('sha256', secret)
-    .update(`${header}.${body}`)
-    .digest('base64url');
-
-  return `${header}.${body}.${signature}`;
+export function hashPassword(password, salt = null) {
+  const userSalt = salt || crypto.randomBytes(16).toString('hex');
+  const hash = crypto.pbkdf2Sync(password, userSalt, 100000, 32, 'sha256').toString('hex');
+  return `${userSalt}:${hash}`;
 }
 
-/**
- * Verify and decode HMAC-SHA256 signed JWT token
- */
-export function verifyJwt(token, secret = JWT_SECRET) {
-  if (!token || typeof token !== 'string') return null;
-
-  const parts = token.split('.');
-  if (parts.length !== 3) return null;
-
-  const [header, body, signature] = parts;
-
-  const expectedSignature = crypto
-    .createHmac('sha256', secret)
-    .update(`${header}.${body}`)
-    .digest('base64url');
-
-  if (signature !== expectedSignature) {
-    return null; // Invalid signature
+export function verifyPassword(password, storedHash) {
+  if (!storedHash) return false;
+  if (!storedHash.includes(':')) {
+    // Legacy fallback support for dev seeds
+    const legacyHash = crypto.pbkdf2Sync(password, 'voicecart_salt_2026', 1000, 32, 'sha256').toString('hex');
+    return legacyHash === storedHash;
   }
 
-  try {
-    const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf-8'));
-    const now = Math.floor(Date.now() / 1000);
-    if (payload.exp && now > payload.exp) {
-      return null; // Expired token
-    }
-    return payload;
-  } catch {
-    return null;
-  }
+  const [salt, expectedHash] = storedHash.split(':');
+  const actualHash = crypto.pbkdf2Sync(password, salt, 100000, 32, 'sha256').toString('hex');
+  return crypto.timingSafeEqual(Buffer.from(actualHash), Buffer.from(expectedHash));
 }
 
 /**
- * Authenticate user with email and password
+ * Generate cryptographically signed JWT with audience, issuer, and expiry
  */
-export async function authenticateUser(email, password) {
-  if (!email || !password) return null;
-
-  const cleanEmail = email.toLowerCase().trim();
-  const user = DEMO_USERS.find(u => u.email === cleanEmail);
-  if (!user) return null;
-
-  const passwordHash = hashPassword(password);
-  if (user.password_hash !== passwordHash) return null;
-
-  const token = generateJwt({
-    userId: user.id,
-    tenantId: user.tenant_id,
-    restaurantId: user.restaurant_id,
+export async function generateToken(user) {
+  return new SignJWT({
+    sub: String(user.id),
     email: user.email,
     name: user.name,
-    role: user.role,
-  });
+    tenant_id: user.tenant_id || 't_annapoorna',
+    restaurant_id: user.restaurant_id || 'r_coimbatore_01',
+    role: user.role || 'STAFF',
+  })
+    .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
+    .setIssuer(JWT_ISSUER)
+    .setAudience(JWT_AUDIENCE)
+    .setIssuedAt()
+    .setExpirationTime('24h')
+    .sign(JWT_KEY);
+}
+
+/**
+ * Verify and decode JWT token
+ */
+export async function verifyToken(token) {
+  try {
+    const { payload } = await jwtVerify(token, JWT_KEY, {
+      issuer: JWT_ISSUER,
+      audience: JWT_AUDIENCE,
+    });
+    return payload;
+  } catch (err) {
+    throw new AppError(401, 'INVALID_TOKEN', `Authentication failed: ${err.message}`);
+  }
+}
+
+/**
+ * Authenticate user with database lookup
+ */
+export async function authenticateUser(email, password) {
+  const normalizedEmail = email.toLowerCase().trim();
+
+  let user = await dbGet('SELECT * FROM users WHERE email = ?', [normalizedEmail]);
+
+  // If user doesn't exist in DB but matches known demo accounts in dev, auto-seed user into DB
+  if (!user && process.env.NODE_ENV !== 'production') {
+    const demoAccounts = {
+      'admin@annapoorna.com': { name: 'Admin Manager', role: 'ADMIN', pass: 'Annapoorna@123' },
+      'kitchen@annapoorna.com': { name: 'Master Chef', role: 'KITCHEN', pass: 'Kitchen@123' },
+      'staff@annapoorna.com': { name: 'Front Desk Staff', role: 'STAFF', pass: 'Staff@123' },
+    };
+
+    const demo = demoAccounts[normalizedEmail];
+    if (demo && demo.pass === password) {
+      const hashed = hashPassword(password);
+      await dbRun(
+        `INSERT OR IGNORE INTO users (tenant_id, restaurant_id, email, password_hash, name, role)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        ['t_annapoorna', 'r_coimbatore_01', normalizedEmail, hashed, demo.name, demo.role]
+      );
+      user = await dbGet('SELECT * FROM users WHERE email = ?', [normalizedEmail]);
+    }
+  }
+
+  if (!user) {
+    throw new AppError(401, 'INVALID_CREDENTIALS', 'Invalid email or password');
+  }
+
+  const isValid = verifyPassword(password, user.password_hash);
+  if (!isValid) {
+    throw new AppError(401, 'INVALID_CREDENTIALS', 'Invalid email or password');
+  }
+
+  const token = await generateToken(user);
+
+  logger.info(`[Auth] User authenticated: ${user.email} (${user.role})`);
 
   return {
     token,
     user: {
       id: user.id,
-      tenantId: user.tenant_id,
-      restaurantId: user.restaurant_id,
       email: user.email,
       name: user.name,
+      tenant_id: user.tenant_id,
+      restaurant_id: user.restaurant_id,
       role: user.role,
     },
   };
 }
-
-export default {
-  hashPassword,
-  generateJwt,
-  verifyJwt,
-  authenticateUser,
-};

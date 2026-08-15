@@ -8,7 +8,20 @@ import { resolve } from 'path';
 
 let server;
 let BASE_URL;
+let authToken;
 const TEST_DB = resolve('./test_integration.db');
+
+async function getAuthToken() {
+  if (authToken) return authToken;
+  const authRes = await fetch(`${BASE_URL}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'admin@annapoorna.com', password: 'Annapoorna@123' }),
+  });
+  const authData = await authRes.json();
+  authToken = authData.token;
+  return authToken;
+}
 
 test.before(async () => {
   if (existsSync(TEST_DB)) unlinkSync(TEST_DB);
@@ -25,6 +38,8 @@ test.before(async () => {
       resolve();
     });
   });
+
+  await getAuthToken();
 });
 
 test.after(async () => {
@@ -34,8 +49,11 @@ test.after(async () => {
   try { if (existsSync(TEST_DB)) unlinkSync(TEST_DB); } catch {}
 });
 
-test('Integration Test: GET /api/stats (Dashboard Statistics)', async () => {
-  const res = await fetch(`${BASE_URL}/api/stats`);
+test('Integration Test: GET /api/stats (Authenticated Dashboard Statistics)', async () => {
+  const token = await getAuthToken();
+  const res = await fetch(`${BASE_URL}/api/stats`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
   assert.equal(res.status, 200);
   const data = await res.json();
   
@@ -45,7 +63,14 @@ test('Integration Test: GET /api/stats (Dashboard Statistics)', async () => {
   assert.ok('revenue' in data);
 });
 
-test('Integration Test: GET /api/catalog (Menu Items)', async () => {
+test('Integration Test: GET /api/stats without token returns 401', async () => {
+  const res = await fetch(`${BASE_URL}/api/stats`);
+  assert.equal(res.status, 401);
+  const data = await res.json();
+  assert.equal(data.error.code, 'AUTH_REQUIRED');
+});
+
+test('Integration Test: GET /api/catalog (Public Menu Items)', async () => {
   const res = await fetch(`${BASE_URL}/api/catalog`);
   assert.equal(res.status, 200);
   const items = await res.json();
@@ -97,7 +122,7 @@ test('Integration Test: GET /pin/:orderId (Mobile Map Pin Drop Page)', async () 
   const res = await fetch(`${BASE_URL}/pin/ORD-999?lat=11.006&lng=76.9543`);
   assert.equal(res.status, 200);
   const html = await res.text();
-  assert.ok(html.includes('Confirm Your Location'));
+  assert.ok(html.includes('Confirm Your Delivery Location'));
   assert.ok(html.includes('ORD-999'));
 });
 
@@ -111,4 +136,20 @@ test('Integration Test: POST /api/pin-confirm (Location Confirmation)', async ()
   assert.equal(res.status, 200);
   const data = await res.json();
   assert.equal(data.success, true);
+});
+
+test('Integration Test: Zod Schema validation rejects malformed order status update', async () => {
+  const token = await getAuthToken();
+  const res = await fetch(`${BASE_URL}/api/orders/1`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ status: 'invalid_status_xyz' }),
+  });
+
+  assert.equal(res.status, 400);
+  const data = await res.json();
+  assert.equal(data.error.code, 'VALIDATION_ERROR');
 });

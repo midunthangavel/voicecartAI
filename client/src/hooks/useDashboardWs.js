@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { apiFetch, getStoredToken } from '../services/apiClient';
 
 const isLocal = typeof window !== 'undefined' &&
   (['localhost', '127.0.0.1'].includes(window.location.hostname) || window.location.hostname.startsWith('10.'));
@@ -7,7 +8,7 @@ const apiBase = isLocal ? '' : 'https://voicecartai.onrender.com';
 /**
  * Custom Hook: Real-Time Dashboard WebSocket Coordinator
  * 
- * Manages WebSocket connection to /dashboard-ws, event buffering,
+ * Manages authenticated WebSocket connection to /dashboard-ws, event buffering,
  * auto-reconnect backoff, and live metrics synchronization.
  */
 export function useDashboardWs() {
@@ -27,12 +28,9 @@ export function useDashboardWs() {
 
   const fetchStats = useCallback(async () => {
     try {
-      const res = await fetch(`${apiBase}/api/stats`);
-      if (res.ok) {
-        const data = await res.json();
-        setStats(data);
-        setServerStatus('online');
-      }
+      const data = await apiFetch(`${apiBase}/api/stats`);
+      setStats(data);
+      setServerStatus('online');
     } catch {
       setServerStatus('offline');
     }
@@ -46,11 +44,15 @@ export function useDashboardWs() {
 
   useEffect(() => {
     let reconnectAttempts = 0;
+    let isCancelled = false;
 
     function connect() {
+      if (isCancelled) return;
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsHost = isLocal ? window.location.host : 'voicecartai.onrender.com';
-      const ws = new WebSocket(`${protocol}//${wsHost}/dashboard-ws`);
+      const token = getStoredToken();
+      const tokenQuery = token ? `?access_token=${encodeURIComponent(token)}` : '';
+      const ws = new WebSocket(`${protocol}//${wsHost}/dashboard-ws${tokenQuery}`);
 
       ws.onopen = () => {
         setServerStatus('online');
@@ -76,8 +78,10 @@ export function useDashboardWs() {
 
       ws.onclose = () => {
         setServerStatus('offline');
-        const delay = Math.min(1000 * Math.pow(1.5, reconnectAttempts++), 10000);
-        reconnectTimeoutRef.current = setTimeout(connect, delay);
+        if (!isCancelled) {
+          const delay = Math.min(1000 * Math.pow(1.5, reconnectAttempts++), 10000);
+          reconnectTimeoutRef.current = setTimeout(connect, delay);
+        }
       };
 
       ws.onerror = () => {
@@ -89,7 +93,15 @@ export function useDashboardWs() {
 
     connect();
 
+    const handleAuthChange = () => {
+      wsRef.current?.close();
+      connect();
+    };
+    window.addEventListener('voicecart_auth_change', handleAuthChange);
+
     return () => {
+      isCancelled = true;
+      window.removeEventListener('voicecart_auth_change', handleAuthChange);
       clearTimeout(reconnectTimeoutRef.current);
       wsRef.current?.close();
     };

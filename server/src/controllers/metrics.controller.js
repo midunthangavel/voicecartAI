@@ -3,25 +3,26 @@ import { getAuditLogs } from '../services/audit.service.js';
 
 /**
  * Controller for Observability, Metrics, and Audit Trails
+ * Scoped strictly by server-side authenticated identity (req.auth).
  */
 
-export async function getLatencyMetrics(req, res) {
+export async function getLatencyMetrics(req, res, next) {
   try {
-    const limit = parseInt(req.query.limit, 10) || 100;
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 200);
     const analytics = await getLatencyAnalytics(limit);
     res.json(analytics);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 }
 
-export async function getAuditHistory(req, res) {
+export async function getAuditHistory(req, res, next) {
   try {
-    const restaurantId = req.query.restaurant_id || 'r_coimbatore_01';
-    const limit = parseInt(req.query.limit, 10) || 50;
+    const restaurantId = req.auth?.restaurantId || 'r_coimbatore_01';
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 100);
     const logs = await getAuditLogs(restaurantId, limit);
     res.json(logs);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 }

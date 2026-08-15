@@ -1,34 +1,30 @@
-/**
- * Role-Based Access Control (RBAC) Middleware
- * 
- * Enforces permissions for user roles:
- *   - ADMIN (Full administrative capabilities)
- *   - RESTAURANT_MANAGER (Catalog management, pricing, analytics)
- *   - STAFF (Live call monitoring, manual orders)
- *   - KITCHEN (KDS order viewing and status updates)
- */
+import { AppError } from '../utils/AppError.js';
 
+export const ROLES = {
+  ADMIN: 'ADMIN',
+  RESTAURANT_MANAGER: 'RESTAURANT_MANAGER',
+  STAFF: 'STAFF',
+  KITCHEN: 'KITCHEN',
+};
+
+/**
+ * Role-Based Access Control (RBAC) Guard
+ * 
+ * Verifies that the authenticated user has one of the allowed roles.
+ */
 export function requireRole(...allowedRoles) {
   return (req, res, next) => {
-    if (!req.user) {
-      return res.status(401).json({ error: 'Unauthorized: Authentication required' });
+    const userRole = req.auth?.role || req.user?.role;
+
+    if (!userRole) {
+      return next(new AppError(401, 'AUTH_REQUIRED', 'Authentication required for this resource'));
     }
 
-    // ADMIN always has full access
-    if (req.user.role === 'ADMIN') {
-      return next();
+    if (!allowedRoles.includes(userRole) && userRole !== ROLES.ADMIN) {
+      return next(new AppError(403, 'FORBIDDEN', `Access forbidden: requires one of [${allowedRoles.join(', ')}] role`));
     }
 
-    if (allowedRoles.includes(req.user.role)) {
-      return next();
-    }
-
-    console.warn(`[RBAC] Access denied for user ${req.user.email} (Role: ${req.user.role}) on ${req.method} ${req.originalUrl}`);
-    return res.status(403).json({
-      error: 'Forbidden: Insufficient permissions for this resource',
-      requiredRoles: allowedRoles,
-      userRole: req.user.role,
-    });
+    next();
   };
 }
 

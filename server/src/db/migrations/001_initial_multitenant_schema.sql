@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS branches (
 -- 6. Catalog Categories
 CREATE TABLE IF NOT EXISTS catalog_categories (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id TEXT NOT NULL DEFAULT 't_annapoorna' REFERENCES tenants(id),
   restaurant_id TEXT NOT NULL REFERENCES restaurants(id),
   name TEXT NOT NULL,
   name_tamil TEXT,
@@ -69,6 +70,7 @@ CREATE TABLE IF NOT EXISTS catalog_categories (
 -- 7. Catalog Items
 CREATE TABLE IF NOT EXISTS catalog_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id TEXT NOT NULL DEFAULT 't_annapoorna' REFERENCES tenants(id),
   restaurant_id TEXT NOT NULL REFERENCES restaurants(id),
   category_id INTEGER REFERENCES catalog_categories(id),
   sku TEXT,
@@ -97,6 +99,7 @@ CREATE TABLE IF NOT EXISTS catalog_item_variants (
 -- 9. Customers
 CREATE TABLE IF NOT EXISTS customers (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id TEXT NOT NULL DEFAULT 't_annapoorna' REFERENCES tenants(id),
   restaurant_id TEXT NOT NULL REFERENCES restaurants(id),
   phone TEXT NOT NULL,
   name TEXT,
@@ -124,6 +127,7 @@ CREATE TABLE IF NOT EXISTS customer_addresses (
 -- 11. Phone Calls
 CREATE TABLE IF NOT EXISTS calls (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id TEXT NOT NULL DEFAULT 't_annapoorna' REFERENCES tenants(id),
   restaurant_id TEXT NOT NULL DEFAULT 'r_coimbatore_01',
   call_sid TEXT UNIQUE,
   provider TEXT DEFAULT 'twilio',
@@ -168,6 +172,7 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
 -- 14. Authoritative Orders
 CREATE TABLE IF NOT EXISTS orders (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id TEXT NOT NULL DEFAULT 't_annapoorna' REFERENCES tenants(id),
   restaurant_id TEXT NOT NULL DEFAULT 'r_coimbatore_01',
   call_id INTEGER REFERENCES calls(id),
   customer_id INTEGER REFERENCES customers(id),
