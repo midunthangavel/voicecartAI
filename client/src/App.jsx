@@ -6,6 +6,7 @@ import LiveCallMonitor from './components/LiveCallMonitor.jsx';
 import OrderDispatch from './components/OrderDispatch.jsx';
 import CatalogManager from './components/CatalogManager.jsx';
 import VoiceAnalytics from './components/VoiceAnalytics.jsx';
+import EnterpriseConsole from './components/EnterpriseConsole.jsx';
 import MobileCallView from './components/MobileCallView.jsx';
 import LoginModal from './components/LoginModal.jsx';
 import { useDashboardWs } from './hooks/useDashboardWs.js';
@@ -145,6 +146,7 @@ export default function App() {
         {activeView === 'orders' && <OrderDispatch events={events} />}
         {activeView === 'catalog' && <CatalogManager />}
         {activeView === 'analytics' && <VoiceAnalytics />}
+        {activeView === 'enterprise' && <EnterpriseConsole />}
       </main>
 
       {/* Login Authentication Modal */}

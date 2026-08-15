@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Mic, MonitorSpeaker, ShoppingBag, BookOpen, BarChart3, Zap, Sun, Moon, Cpu, Radio, Volume2 } from 'lucide-react';
+import { Mic, MonitorSpeaker, ShoppingBag, BookOpen, BarChart3, ShieldCheck, Zap, Sun, Moon, Cpu, Radio, Volume2 } from 'lucide-react';
 
 const navItems = [
   { id: 'simulator', label: 'Voice Simulator', icon: Mic },
@@ -7,6 +7,7 @@ const navItems = [
   { id: 'orders', label: 'Orders & KDS', icon: ShoppingBag },
   { id: 'catalog', label: 'Catalog & Hints', icon: BookOpen },
   { id: 'analytics', label: 'Voice Analytics', icon: BarChart3 },
+  { id: 'enterprise', label: 'Enterprise & Reliability', icon: ShieldCheck },
 ];
 
 export default function Sidebar({ activeView, onNavigate, activeCalls, serverStatus, theme, onToggleTheme }) {
