@@ -191,6 +191,8 @@ CREATE TABLE IF NOT EXISTS orders (
   items TEXT,
   scheduled_for TIMESTAMP,
   version INTEGER DEFAULT 1,
+  deleted_at TIMESTAMP,
+  deleted_by TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

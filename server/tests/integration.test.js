@@ -24,7 +24,7 @@ async function getAuthToken() {
 }
 
 test.before(async () => {
-  if (existsSync(TEST_DB)) unlinkSync(TEST_DB);
+  try { if (existsSync(TEST_DB)) unlinkSync(TEST_DB); } catch {}
   process.env.DB_PATH = TEST_DB;
   await initDatabase();
 

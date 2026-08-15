@@ -1,11 +1,11 @@
 import { dbAll, dbGet, dbRun, transaction } from '../../db.js';
 import { recordAuditLog } from '../../services/audit.service.js';
-import { transitionOrder, ORDER_ACTIONS } from './orderStateMachine.js';
+import { enqueueOutboxEvent } from '../../services/outbox.service.js';
 import { AppError } from '../../utils/AppError.js';
 
 /**
  * Order Repository — Authoritative persistence for orders and line-item snapshots
- * Enforces strict multi-tenant scoping (tenant_id + restaurant_id) and database transactions.
+ * Enforces strict multi-tenant scoping, optimistic concurrency control, soft deletes, and transactional outbox events.
  */
 
 export async function createOrderWithSnapshots(orderData, items = []) {
@@ -27,6 +27,7 @@ export async function createOrderWithSnapshots(orderData, items = []) {
     delivery_address = null,
     landmark = null,
     scheduled_for = null,
+    customer_phone = null,
   } = orderData;
 
   return transaction(async () => {
@@ -35,8 +36,8 @@ export async function createOrderWithSnapshots(orderData, items = []) {
       `INSERT INTO orders (
          tenant_id, restaurant_id, call_id, customer_id, ondc_order_id, status,
          subtotal, tax, delivery_fee, discount, total_amount, currency,
-         payment_status, payment_link, delivery_address, landmark, items, scheduled_for
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         payment_status, payment_link, delivery_address, landmark, items, scheduled_for, version
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
       [
         tenant_id,
         restaurant_id,
@@ -94,12 +95,28 @@ export async function createOrderWithSnapshots(orderData, items = []) {
       after_state: { orderId, status, total_amount, itemsCount: items.length },
     });
 
+    // 4. Write Transactional Outbox Event (Guaranteed delivery to WhatsApp/KDS/ONDC)
+    await enqueueOutboxEvent({
+      tenant_id,
+      restaurant_id,
+      event_type: 'ORDER_CONFIRMED',
+      aggregate_type: 'order',
+      aggregate_id: orderId,
+      payload: {
+        orderId,
+        phone: customer_phone,
+        items,
+        total: total_amount,
+        address: delivery_address,
+        landmark,
+      },
+    });
+
     return orderId;
   });
 }
 
 export async function getRecentOrders(options = {}) {
-  // Support both legacy signature (restaurantId, limit) and structured object options
   let tenantId = 't_annapoorna';
   let restaurantId = 'r_coimbatore_01';
   let limit = 50;
@@ -114,7 +131,9 @@ export async function getRecentOrders(options = {}) {
   }
 
   const orders = await dbAll(
-    'SELECT * FROM orders WHERE tenant_id = ? AND restaurant_id = ? ORDER BY created_at DESC LIMIT ?',
+    `SELECT * FROM orders 
+     WHERE tenant_id = ? AND restaurant_id = ? AND (deleted_at IS NULL)
+     ORDER BY created_at DESC LIMIT ?`,
     [tenantId, restaurantId, limit]
   );
 
@@ -151,7 +170,8 @@ export async function getOrderWithItems(orderId, options = {}) {
   const restaurantId = typeof options === 'string' ? options : (options.restaurantId || 'r_coimbatore_01');
 
   const order = await dbGet(
-    'SELECT * FROM orders WHERE id = ? AND tenant_id = ? AND restaurant_id = ?',
+    `SELECT * FROM orders 
+     WHERE id = ? AND tenant_id = ? AND restaurant_id = ? AND (deleted_at IS NULL)`,
     [orderId, tenantId, restaurantId]
   );
   if (!order) return null;
@@ -176,9 +196,10 @@ export async function getOrderWithItems(orderId, options = {}) {
 export async function updateOrderStatus(orderId, newStatus, options = {}, actor = { type: 'staff', id: 'system' }) {
   const tenantId = typeof options === 'object' ? (options.tenantId || 't_annapoorna') : 't_annapoorna';
   const restaurantId = typeof options === 'string' ? options : (options.restaurantId || 'r_coimbatore_01');
+  const expectedVersion = typeof options === 'object' ? options.expectedVersion : null;
 
   const previous = await dbGet(
-    'SELECT * FROM orders WHERE id = ? AND tenant_id = ? AND restaurant_id = ?',
+    `SELECT * FROM orders WHERE id = ? AND tenant_id = ? AND restaurant_id = ? AND (deleted_at IS NULL)`,
     [orderId, tenantId, restaurantId]
   );
 
@@ -187,10 +208,20 @@ export async function updateOrderStatus(orderId, newStatus, options = {}, actor 
   }
 
   return transaction(async () => {
-    const res = await dbRun(
-      'UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND tenant_id = ? AND restaurant_id = ?',
-      [newStatus, orderId, tenantId, restaurantId]
-    );
+    let query = 'UPDATE orders SET status = ?, version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND tenant_id = ? AND restaurant_id = ?';
+    let params = [newStatus, orderId, tenantId, restaurantId];
+
+    // Optimistic Concurrency Control
+    if (expectedVersion !== undefined && expectedVersion !== null) {
+      query += ' AND version = ?';
+      params.push(expectedVersion);
+    }
+
+    const res = await dbRun(query, params);
+
+    if (res.changes === 0 && expectedVersion !== null) {
+      throw new AppError(409, 'OPTIMISTIC_LOCK_CONFLICT', `Conflict: Order #${orderId} was updated by another user. Please refresh.`);
+    }
 
     // Record State Transition Audit within transaction
     await recordAuditLog({
@@ -201,8 +232,51 @@ export async function updateOrderStatus(orderId, newStatus, options = {}, actor 
       action: 'UPDATE_STATUS',
       resource_type: 'order',
       resource_id: orderId,
-      before_state: { status: previous.status },
-      after_state: { status: newStatus },
+      before_state: { status: previous.status, version: previous.version },
+      after_state: { status: newStatus, version: (previous.version || 1) + 1 },
+    });
+
+    // Write Outbox Event for status change
+    await enqueueOutboxEvent({
+      tenant_id: tenantId,
+      restaurant_id: restaurantId,
+      event_type: 'ORDER_STATUS_CHANGED',
+      aggregate_type: 'order',
+      aggregate_id: orderId,
+      payload: {
+        orderId,
+        status: newStatus,
+      },
+    });
+
+    return { ...res, version: (previous.version || 1) + 1 };
+  });
+}
+
+export async function softDeleteOrder(orderId, options = {}, deletedBy = 'admin') {
+  const tenantId = typeof options === 'object' ? (options.tenantId || 't_annapoorna') : 't_annapoorna';
+  const restaurantId = typeof options === 'string' ? options : (options.restaurantId || 'r_coimbatore_01');
+
+  return transaction(async () => {
+    const res = await dbRun(
+      `UPDATE orders 
+       SET deleted_at = CURRENT_TIMESTAMP, deleted_by = ?, updated_at = CURRENT_TIMESTAMP 
+       WHERE id = ? AND tenant_id = ? AND restaurant_id = ? AND deleted_at IS NULL`,
+      [deletedBy, orderId, tenantId, restaurantId]
+    );
+
+    if (res.changes === 0) {
+      throw new AppError(404, 'ORDER_NOT_FOUND', `Order #${orderId} not found or already deleted`);
+    }
+
+    await recordAuditLog({
+      tenant_id: tenantId,
+      restaurant_id: restaurantId,
+      actor_type: 'staff',
+      actor_id: deletedBy,
+      action: 'SOFT_DELETE',
+      resource_type: 'order',
+      resource_id: orderId,
     });
 
     return res;

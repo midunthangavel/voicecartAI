@@ -38,13 +38,27 @@ export async function initDatabase() {
   });
 }
 
+import { performance } from 'perf_hooks';
+import { logger } from './utils/logger.js';
+
+const SLOW_QUERY_THRESHOLD_MS = 100;
+
+function logQueryProfile(type, sql, durationMs) {
+  if (durationMs >= SLOW_QUERY_THRESHOLD_MS) {
+    logger.warn(`[SlowQuery] ${type} (${Math.round(durationMs)}ms): ${sql.substring(0, 120)}...`);
+  }
+}
+
 /**
  * Executes an INSERT, UPDATE, or DELETE query and returns { lastID, changes }
  */
 export function dbRun(sql, params = []) {
   return new Promise((resolve, reject) => {
     if (!db) return reject(new Error('Database not initialized'));
+    const start = performance.now();
     db.run(sql, params, function (err) {
+      const duration = performance.now() - start;
+      logQueryProfile('dbRun', sql, duration);
       if (err) return reject(err);
       resolve({ lastID: this.lastID, changes: this.changes });
     });
@@ -57,7 +71,10 @@ export function dbRun(sql, params = []) {
 export function dbGet(sql, params = []) {
   return new Promise((resolve, reject) => {
     if (!db) return reject(new Error('Database not initialized'));
+    const start = performance.now();
     db.get(sql, params, (err, row) => {
+      const duration = performance.now() - start;
+      logQueryProfile('dbGet', sql, duration);
       if (err) return reject(err);
       resolve(row);
     });
@@ -70,7 +87,10 @@ export function dbGet(sql, params = []) {
 export function dbAll(sql, params = []) {
   return new Promise((resolve, reject) => {
     if (!db) return reject(new Error('Database not initialized'));
+    const start = performance.now();
     db.all(sql, params, (err, rows) => {
+      const duration = performance.now() - start;
+      logQueryProfile('dbAll', sql, duration);
       if (err) return reject(err);
       resolve(rows || []);
     });

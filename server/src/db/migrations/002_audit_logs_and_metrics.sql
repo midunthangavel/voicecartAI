@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   before_state TEXT,
   after_state TEXT,
   metadata TEXT DEFAULT '{}',
+  previous_hash TEXT,
+  hash TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

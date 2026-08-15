@@ -1,11 +1,13 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import { apiRouter } from './routes/api.routes.js';
+import { v1Router } from './routes/v1/index.js';
 import { telephonyRouter } from './routes/telephony.routes.js';
 import { correlationIdMiddleware } from './middleware/correlationId.middleware.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.middleware.js';
+import { initOutboxWorker } from './workers/outbox.worker.js';
 import { dbGet } from './db.js';
+import './config/env.js'; // Trigger boot-time env validation
 
 /**
  * Creates and configures the production Express application
@@ -77,13 +79,22 @@ export function createApp() {
     });
   });
 
-  // 5. Mount Route Gateways (Telephony & Webhooks first, then Protected API)
+  // 5. Mount Route Gateways
+  // Telephony & Webhooks
   app.use('/', telephonyRouter);
-  app.use('/api', apiRouter);
+
+  // Canonical Versioned API (v1) & Backward-Compatible Alias (/api)
+  app.use('/api/v1', v1Router);
+  app.use('/api', v1Router);
 
   // 6. 404 & Centralized Error Handling
   app.use(notFoundHandler);
   app.use(errorHandler);
+
+  // 7. Start Transactional Outbox Background Poller (if in server mode)
+  if (process.env.NODE_ENV !== 'test') {
+    initOutboxWorker();
+  }
 
   return app;
 }

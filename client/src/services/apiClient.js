@@ -31,7 +31,7 @@ export function clearSession() {
 }
 
 export async function login(email, password) {
-  const res = await fetch('/api/auth/login', {
+  const res = await fetch('/api/v1/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password }),
@@ -57,14 +57,19 @@ export async function apiFetch(path, options = {}) {
     headers.Authorization = `Bearer ${token}`;
   }
 
-  const res = await fetch(path, {
+  // Normalize /api/ paths to /api/v1/
+  const targetUrl = path.startsWith('/api/') && !path.startsWith('/api/v1/')
+    ? path.replace('/api/', '/api/v1/')
+    : path;
+
+  const res = await fetch(targetUrl, {
     ...options,
     headers,
   });
 
   if (res.status === 401) {
     // If not on login route, session is invalid/expired
-    if (!path.includes('/api/auth/login')) {
+    if (!targetUrl.includes('/auth/login')) {
       console.warn('[ApiClient] 401 Unauthorized, clearing session.');
       clearSession();
     }

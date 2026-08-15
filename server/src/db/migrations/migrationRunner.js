@@ -59,6 +59,8 @@ export async function runMigrations(db) {
     ['dispute_reason', 'TEXT'],
     ['dispute_resolved_by', 'TEXT'],
     ['dispute_notes', 'TEXT'],
+    ['deleted_at', 'TIMESTAMP'],
+    ['deleted_by', 'TEXT'],
   ];
 
   for (const [col, def] of orderColumns) {
@@ -91,10 +93,19 @@ export async function runMigrations(db) {
   }
 
   await safeAddColumn('catalog_items', 'tenant_id', "TEXT DEFAULT 't_annapoorna'");
+  await safeAddColumn('catalog_items', 'deleted_at', 'TIMESTAMP');
+  await safeAddColumn('catalog_items', 'deleted_by', 'TEXT');
+  await safeAddColumn('catalog_items', 'version', 'INTEGER DEFAULT 1');
+
   await safeAddColumn('catalog_categories', 'tenant_id', "TEXT DEFAULT 't_annapoorna'");
   await safeAddColumn('customers', 'tenant_id', "TEXT DEFAULT 't_annapoorna'");
   await safeAddColumn('customers', 'restaurant_id', "TEXT DEFAULT 'r_coimbatore_01'");
+  await safeAddColumn('customers', 'deleted_at', 'TIMESTAMP');
+  await safeAddColumn('customers', 'deleted_by', 'TEXT');
   await safeAddColumn('customer_addresses', 'customer_id', 'INTEGER');
+
+  await safeAddColumn('audit_logs', 'previous_hash', 'TEXT');
+  await safeAddColumn('audit_logs', 'hash', 'TEXT');
 
   // 3. Find and sort SQL files
   const files = readdirSync(migrationsDir)
