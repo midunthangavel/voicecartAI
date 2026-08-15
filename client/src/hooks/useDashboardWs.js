@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { apiFetch, getStoredToken } from '../services/apiClient';
+import { apiFetch, getStoredToken, getWsTicket } from '../services/apiClient';
 
 const isLocal = typeof window !== 'undefined' &&
   (['localhost', '127.0.0.1'].includes(window.location.hostname) || window.location.hostname.startsWith('10.'));
@@ -8,8 +8,8 @@ const apiBase = isLocal ? '' : 'https://voicecartai.onrender.com';
 /**
  * Custom Hook: Real-Time Dashboard WebSocket Coordinator
  * 
- * Manages authenticated WebSocket connection to /dashboard-ws, event buffering,
- * auto-reconnect backoff, and live metrics synchronization.
+ * Manages authenticated WebSocket connection to /dashboard-ws using single-use tickets,
+ * event buffering, auto-reconnect backoff, and live metrics synchronization.
  */
 export function useDashboardWs() {
   const [serverStatus, setServerStatus] = useState('connecting');
@@ -28,7 +28,7 @@ export function useDashboardWs() {
 
   const fetchStats = useCallback(async () => {
     try {
-      const data = await apiFetch(`${apiBase}/api/stats`);
+      const data = await apiFetch(`${apiBase}/api/v1/stats`);
       setStats(data);
       setServerStatus('online');
     } catch {
@@ -46,13 +46,14 @@ export function useDashboardWs() {
     let reconnectAttempts = 0;
     let isCancelled = false;
 
-    function connect() {
+    async function connect() {
       if (isCancelled) return;
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsHost = isLocal ? window.location.host : 'voicecartai.onrender.com';
+      const ticket = await getWsTicket();
       const token = getStoredToken();
-      const tokenQuery = token ? `?access_token=${encodeURIComponent(token)}` : '';
-      const ws = new WebSocket(`${protocol}//${wsHost}/dashboard-ws${tokenQuery}`);
+      const queryParam = ticket ? `?ticket=${encodeURIComponent(ticket)}` : (token ? `?access_token=${encodeURIComponent(token)}` : '');
+      const ws = new WebSocket(`${protocol}//${wsHost}/dashboard-ws${queryParam}`);
 
       ws.onopen = () => {
         setServerStatus('online');

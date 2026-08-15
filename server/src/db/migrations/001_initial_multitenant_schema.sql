@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS tenants (
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  restaurant_id TEXT DEFAULT 'r_coimbatore_01',
   email TEXT UNIQUE,
   password_hash TEXT,
   name TEXT,

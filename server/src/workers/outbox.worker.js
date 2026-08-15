@@ -1,4 +1,4 @@
-import { fetchPendingOutboxEvents, markOutboxEventCompleted, markOutboxEventFailed } from '../services/outbox.service.js';
+import { claimNextOutboxEvents, markOutboxEventCompleted, markOutboxEventFailed } from '../services/outbox.service.js';
 import { enqueueNotificationJob, enqueueDispatchJob } from '../queue/queueManager.js';
 import { broadcastToDashboard } from '../websocket/dashboardWsHandler.js';
 import { withLock } from '../infra/lockService.js';
@@ -6,24 +6,26 @@ import { logger } from '../utils/logger.js';
 
 let isRunning = false;
 let workerTimer = null;
+const WORKER_ID = `outbox_worker_${process.pid}`;
 
 /**
- * Process a single outbox event with distributed lock
+ * Process a single claimed outbox event
  */
 async function processOutboxEvent(event) {
   const lockKey = `outbox:${event.id}`;
 
   await withLock(lockKey, async () => {
-    logger.info(`[OutboxWorker] Processing event #${event.id} (${event.event_type}) for aggregate ${event.aggregate_type}:${event.aggregate_id}`);
+    logger.info(`[OutboxWorker] Processing event #${event.id} (${event.event_type}) for ${event.aggregate_type}:${event.aggregate_id}`);
 
     switch (event.event_type) {
       case 'ORDER_CONFIRMED': {
         const { orderId, phone, items, total, address, landmark } = event.payload;
 
-        // 1. Enqueue WhatsApp notification job
+        // 1. Enqueue WhatsApp notification job with idempotency key
         if (phone) {
           await enqueueNotificationJob({
             type: 'order_receipt',
+            idempotencyKey: `notif_receipt_order_${orderId}`,
             phone,
             orderId,
             items,
@@ -33,8 +35,10 @@ async function processOutboxEvent(event) {
           });
         }
 
-        // 2. Enqueue Kitchen Dispatch job
+        // 2. Enqueue Kitchen Dispatch job with idempotency key
         await enqueueDispatchJob({
+          type: 'DISPATCH_ORDER',
+          idempotencyKey: `dispatch_order_${orderId}`,
           orderId,
           restaurantId: event.restaurant_id,
           tenantId: event.tenant_id,
@@ -42,10 +46,11 @@ async function processOutboxEvent(event) {
           items,
         });
 
-        // 3. Broadcast to Dashboard
+        // 3. Broadcast to Dashboard with tenant context
         broadcastToDashboard({
           type: 'order_confirmed',
           orderId,
+          tenantId: event.tenant_id,
           restaurantId: event.restaurant_id,
           total,
           items,
@@ -54,11 +59,12 @@ async function processOutboxEvent(event) {
       }
 
       case 'ORDER_STATUS_CHANGED': {
-        const { orderId, status, phone } = event.payload;
+        const { orderId, status } = event.payload;
         broadcastToDashboard({
           type: 'order_status_updated',
           orderId,
           status,
+          tenantId: event.tenant_id,
           restaurantId: event.restaurant_id,
         });
         break;
@@ -71,13 +77,14 @@ async function processOutboxEvent(event) {
           orderId,
           lat,
           lng,
+          tenantId: event.tenant_id,
           restaurantId: event.restaurant_id,
         });
         break;
       }
 
       default:
-        logger.warn(`[OutboxWorker] Unknown event_type: ${event.event_type}`);
+        logger.warn(`[OutboxWorker] Unhandled event_type: ${event.event_type}`);
     }
 
     await markOutboxEventCompleted(event.id);
@@ -85,14 +92,14 @@ async function processOutboxEvent(event) {
 }
 
 /**
- * Single worker poll cycle
+ * Single worker poll cycle using atomic claim
  */
 export async function pollOutboxQueue() {
   if (isRunning) return;
   isRunning = true;
 
   try {
-    const events = await fetchPendingOutboxEvents(10);
+    const events = await claimNextOutboxEvents(10, WORKER_ID);
     for (const event of events) {
       try {
         await processOutboxEvent(event);

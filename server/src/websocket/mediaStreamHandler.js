@@ -40,7 +40,9 @@ export async function handleTwilioStream(ws, sessions) {
             const session = sessions.get(sessionId);
             const audioPayload = Buffer.from(msg.media.payload, 'base64');
             const pcmAudio = mulawToPcm16(audioPayload);
-            session.audioChunks.push(pcmAudio);
+            if (session.audioChunks.length < 5000) {
+              session.audioChunks.push(pcmAudio);
+            }
             session.sttStream?.write(pcmAudio);
           }
           break;

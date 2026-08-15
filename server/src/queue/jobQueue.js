@@ -1,10 +1,11 @@
 import { EventEmitter } from 'events';
+import { logger } from '../utils/logger.js';
 
 /**
  * Universal Asynchronous Job Queue Engine
  * 
  * Provides resilient, non-blocking background task processing with
- * concurrency controls, exponential retry backoff, and dead-letter queue (DLQ) tracking.
+ * concurrency controls, exponential retry backoff, registered processors, and dead-letter queue (DLQ) tracking.
  */
 export class JobQueue extends EventEmitter {
   constructor(name, options = {}) {
@@ -25,7 +26,12 @@ export class JobQueue extends EventEmitter {
    * Register a worker processor for a specific job name/type
    */
   process(jobType, handler) {
-    this.processors.set(jobType, handler);
+    if (typeof jobType === 'function' && !handler) {
+      // Default processor for all jobs in this queue
+      this.processors.set('__default__', jobType);
+    } else {
+      this.processors.set(jobType, handler);
+    }
     this._drain();
   }
 
@@ -33,10 +39,19 @@ export class JobQueue extends EventEmitter {
    * Add a job to the queue
    */
   async add(jobType, data = {}, options = {}) {
+    let type = jobType;
+    let payload = data;
+
+    // Handle single-argument invocation
+    if (typeof jobType === 'object' && !data.type) {
+      payload = jobType;
+      type = payload.type || '__default__';
+    }
+
     const job = {
-      id: `${this.name}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      type: jobType,
-      data,
+      id: `${this.name}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      type,
+      data: payload,
       attempts: 0,
       maxRetries: options.maxRetries || this.maxRetries,
       createdAt: new Date().toISOString(),
@@ -46,6 +61,14 @@ export class JobQueue extends EventEmitter {
     this.emit('added', job);
     setImmediate(() => this._drain());
     return job;
+  }
+
+  /**
+   * Enqueue alias for compatibility
+   */
+  async enqueue(data = {}, options = {}) {
+    const type = data.type || '__default__';
+    return this.add(type, data, options);
   }
 
   /**
@@ -59,73 +82,68 @@ export class JobQueue extends EventEmitter {
     const job = this.queue.shift();
     if (!job) return;
 
-    const handler = this.processors.get(job.type);
-    if (!handler) {
-      console.warn(`[JobQueue:${this.name}] No processor registered for job type '${job.type}'. Re-queuing.`);
-      this.queue.unshift(job);
-      return;
-    }
-
     this.runningCount++;
     job.attempts++;
 
-    try {
-      const startTime = Date.now();
-      const result = await handler(job.data, job);
-      const duration = Date.now() - startTime;
+    const processor = this.processors.get(job.type) || this.processors.get('__default__');
 
-      this.runningCount--;
-      this.emit('completed', { job, result, duration });
-      this._drain();
+    if (!processor) {
+      logger.warn(`[JobQueue:${this.name}] No processor registered for job type "${job.type}". Re-queuing with backoff.`);
+      // Put back in queue if processor isn't ready yet
+      setTimeout(() => {
+        this.queue.push(job);
+        this.runningCount--;
+        this._drain();
+      }, 1000);
+      return;
+    }
+
+    try {
+      await processor(job.data, job);
+      this.emit('completed', job);
     } catch (err) {
-      this.runningCount--;
-      console.error(`[JobQueue:${this.name}] Job ${job.id} (${job.type}) failed (Attempt ${job.attempts}/${job.maxRetries}):`, err.message);
+      logger.error(`[JobQueue:${this.name}] Job #${job.id} failed (attempt ${job.attempts}/${job.maxRetries}):`, err.message);
 
       if (job.attempts < job.maxRetries) {
-        // Exponential backoff retry
         const backoffMs = this.initialBackoffMs * Math.pow(2, job.attempts - 1);
         setTimeout(() => {
           this.queue.push(job);
           this._drain();
         }, backoffMs);
-        this.emit('retry', { job, error: err.message, nextAttemptIn: backoffMs });
       } else {
-        // Send to Dead-Letter Queue
+        job.failedReason = err.message;
         job.failedAt = new Date().toISOString();
-        job.error = err.message;
         this.dlq.push(job);
-        this.emit('failed', { job, error: err.message });
-        console.error(`[JobQueue:${this.name}] Job ${job.id} sent to DLQ after ${job.attempts} attempts.`);
-        this._drain();
+        this.emit('failed', job, err);
+        logger.error(`[JobQueue:${this.name}] Job #${job.id} moved to Dead-Letter Queue (DLQ).`);
       }
+    } finally {
+      this.runningCount--;
+      setImmediate(() => this._drain());
     }
   }
 
-  /**
-   * Get current queue statistics
-   */
   getStats() {
     return {
       name: this.name,
-      pending: this.queue.length,
-      active: this.runningCount,
-      dlqCount: this.dlq.length,
+      queued: this.queue.length,
+      running: this.runningCount,
+      dlq: this.dlq.length,
       isPaused: this.isPaused,
     };
   }
 
-  /**
-   * Pause queue processing
-   */
   pause() {
     this.isPaused = true;
   }
 
-  /**
-   * Resume queue processing
-   */
   resume() {
     this.isPaused = false;
     this._drain();
+  }
+
+  clear() {
+    this.queue = [];
+    this.dlq = [];
   }
 }

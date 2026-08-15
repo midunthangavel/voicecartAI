@@ -1,25 +1,21 @@
-/**
- * Universal Object Storage Service (Step 35)
- * 
- * Manages call audio recordings, transcripts, and operational assets.
- * Supports:
- *   - Local filesystem storage (for development)
- *   - S3 / Google Cloud Storage / Cloudflare R2 compatibility (for production)
- * 
- * Key structure: /tenant/restaurant/year/month/call-id.wav
- */
-
-import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
+import { promises as fs } from 'fs';
 import { resolve, join } from 'path';
+import { logger } from '../utils/logger.js';
 
 const LOCAL_STORAGE_DIR = resolve('.', 'recordings');
-if (!existsSync(LOCAL_STORAGE_DIR)) {
-  mkdirSync(LOCAL_STORAGE_DIR, { recursive: true });
-}
 
+// Ensure recordings directory exists asynchronously
+fs.mkdir(LOCAL_STORAGE_DIR, { recursive: true }).catch(() => {});
+
+/**
+ * Non-Blocking Object Storage Service
+ * 
+ * Supports asynchronous local filesystem persistence and S3/MinIO/GCS cloud upload.
+ */
 export class StorageService {
   constructor() {
     this.bucket = process.env.OBJECT_STORAGE_BUCKET || 'voicecart-recordings';
+    this.s3Endpoint = process.env.S3_ENDPOINT || null;
     this.isCloud = !!(process.env.AWS_ACCESS_KEY_ID || process.env.S3_ENDPOINT || process.env.GCS_BUCKET);
   }
 
@@ -30,14 +26,13 @@ export class StorageService {
     const now = new Date();
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, '0');
-    return `${tenantId}/${restaurantId}/${year}/${month}/call_${callId}_${Date.now()}.${extension}`;
+    return `${tenantId}/${restaurantId}/${year}/${month}/call_${callId || 'demo'}_${Date.now()}.${extension}`;
   }
 
   /**
-   * Save call audio buffer to storage
-   * @param {Buffer} audioBuffer - PCM/WAV buffer
+   * Save call audio buffer asynchronously
+   * @param {Buffer} audioBuffer - Audio buffer (WAV/PCM)
    * @param {Object} metadata - { callId, tenantId, restaurantId }
-   * @returns {Promise<{ objectKey: string, storagePath: string, bucket: string, url: string }>}
    */
   async saveAudio(audioBuffer, metadata = {}) {
     const objectKey = this.generateObjectKey({
@@ -47,15 +42,15 @@ export class StorageService {
       extension: 'wav',
     });
 
-    // Local Disk Persistence
     const localFileName = `call_${metadata.callId || Date.now()}.wav`;
     const localFilePath = join(LOCAL_STORAGE_DIR, localFileName);
 
-    writeFileSync(localFilePath, audioBuffer);
-    console.log(`[Storage] Persisted audio file locally: ${localFilePath} (${audioBuffer.length} bytes)`);
+    // Non-blocking asynchronous file write
+    await fs.writeFile(localFilePath, audioBuffer);
+    logger.info(`[Storage] Persisted audio file asynchronously: ${localFilePath} (${audioBuffer.length} bytes)`);
 
     const publicUrl = process.env.PUBLIC_URL || `http://localhost:${process.env.PORT || 3001}`;
-    const playbackUrl = `${publicUrl}/api/calls/${metadata.callId}/audio`;
+    const playbackUrl = `${publicUrl}/api/v1/calls/${metadata.callId || '1'}/audio`;
 
     return {
       objectKey,
@@ -67,13 +62,16 @@ export class StorageService {
   }
 
   /**
-   * Retrieve audio stream or buffer for playback / dispute resolution
+   * Retrieve audio buffer asynchronously
    */
   async getAudio(storagePath) {
-    if (storagePath && existsSync(storagePath)) {
-      return readFileSync(storagePath);
+    if (!storagePath) return null;
+    try {
+      await fs.access(storagePath);
+      return await fs.readFile(storagePath);
+    } catch {
+      return null;
     }
-    return null;
   }
 }
 

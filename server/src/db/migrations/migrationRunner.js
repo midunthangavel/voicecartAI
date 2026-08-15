@@ -107,6 +107,10 @@ export async function runMigrations(db) {
   await safeAddColumn('audit_logs', 'previous_hash', 'TEXT');
   await safeAddColumn('audit_logs', 'hash', 'TEXT');
 
+  await safeAddColumn('users', 'restaurant_id', "TEXT DEFAULT 'r_coimbatore_01'");
+  await safeAddColumn('outbox_events', 'locked_at', 'TIMESTAMP');
+  await safeAddColumn('outbox_events', 'locked_by', 'TEXT');
+
   // 3. Find and sort SQL files
   const files = readdirSync(migrationsDir)
     .filter(f => f.endsWith('.sql'))

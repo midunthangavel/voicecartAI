@@ -18,46 +18,87 @@ const JWT_KEY = new TextEncoder().encode(JWT_SECRET_STRING);
 const JWT_ISSUER = 'voicecart-api';
 const JWT_AUDIENCE = 'voicecart-dashboard';
 
+const PBKDF2_ITERATIONS = 210000;
+
 /**
- * Secure Password Hashing with individual random salts and 100,000 PBKDF2 iterations
+ * Secure Password Hashing with unique random salts and 210,000 PBKDF2 iterations
  */
 export function hashPassword(password, salt = null) {
   const userSalt = salt || crypto.randomBytes(16).toString('hex');
-  const hash = crypto.pbkdf2Sync(password, userSalt, 100000, 32, 'sha256').toString('hex');
+  const hash = crypto.pbkdf2Sync(password, userSalt, PBKDF2_ITERATIONS, 32, 'sha256').toString('hex');
   return `${userSalt}:${hash}`;
 }
 
+/**
+ * Strict Password Verification — No legacy weak hashes permitted
+ */
 export function verifyPassword(password, storedHash) {
-  if (!storedHash) return false;
-  if (!storedHash.includes(':')) {
-    // Legacy fallback support for dev seeds
-    const legacyHash = crypto.pbkdf2Sync(password, 'voicecart_salt_2026', 1000, 32, 'sha256').toString('hex');
-    return legacyHash === storedHash;
+  if (!storedHash || !storedHash.includes(':')) {
+    return false;
   }
 
   const [salt, expectedHash] = storedHash.split(':');
-  const actualHash = crypto.pbkdf2Sync(password, salt, 100000, 32, 'sha256').toString('hex');
+  if (!salt || !expectedHash) return false;
+
+  const actualHash = crypto.pbkdf2Sync(password, salt, PBKDF2_ITERATIONS, 32, 'sha256').toString('hex');
   return crypto.timingSafeEqual(Buffer.from(actualHash), Buffer.from(expectedHash));
 }
 
 /**
- * Generate cryptographically signed JWT with audience, issuer, and expiry
+ * Generate short-lived Access Token (15m)
  */
 export async function generateToken(user) {
   return new SignJWT({
     sub: String(user.id),
     email: user.email,
     name: user.name,
-    tenant_id: user.tenant_id || 't_annapoorna',
-    restaurant_id: user.restaurant_id || 'r_coimbatore_01',
+    tenant_id: user.tenant_id || user.tenantId || 't_annapoorna',
+    restaurant_id: user.restaurant_id || user.restaurantId || 'r_coimbatore_01',
     role: user.role || 'STAFF',
   })
     .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
     .setIssuer(JWT_ISSUER)
     .setAudience(JWT_AUDIENCE)
     .setIssuedAt()
-    .setExpirationTime('24h')
+    .setExpirationTime('15m')
     .sign(JWT_KEY);
+}
+
+/**
+ * Generate short-lived Access Token + 7-Day Refresh Token Pair
+ */
+export async function generateTokenPair(user) {
+  const accessToken = await generateToken(user);
+  const jti = `jti_${crypto.randomUUID()}`;
+
+  const refreshToken = await new SignJWT({
+    sub: String(user.id),
+    jti,
+    type: 'REFRESH',
+  })
+    .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
+    .setIssuer(JWT_ISSUER)
+    .setAudience(JWT_AUDIENCE)
+    .setIssuedAt()
+    .setExpirationTime('7d')
+    .sign(JWT_KEY);
+
+  // Store refresh token in database ledger
+  try {
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    await dbRun(
+      'INSERT INTO refresh_tokens (user_id, jti, expires_at) VALUES (?, ?, ?)',
+      [String(user.id), jti, expiresAt]
+    );
+  } catch (err) {
+    logger.warn('[Auth] Failed to persist refresh token to database:', err.message);
+  }
+
+  return {
+    accessToken,
+    refreshToken,
+    expiresInSeconds: 900, // 15 minutes
+  };
 }
 
 /**
@@ -76,34 +117,56 @@ export async function verifyToken(token) {
 }
 
 /**
- * Authenticate user with database lookup
+ * Rotate Refresh Token — Validates single-use refresh token and returns new pair
  */
-export async function authenticateUser(email, password) {
-  const normalizedEmail = email.toLowerCase().trim();
-
-  let user = await dbGet('SELECT * FROM users WHERE email = ?', [normalizedEmail]);
-
-  // If user doesn't exist in DB but matches known demo accounts in dev, auto-seed user into DB
-  if (!user && process.env.NODE_ENV !== 'production') {
-    const demoAccounts = {
-      'admin@annapoorna.com': { name: 'Admin Manager', role: 'ADMIN', pass: 'Annapoorna@123' },
-      'kitchen@annapoorna.com': { name: 'Master Chef', role: 'KITCHEN', pass: 'Kitchen@123' },
-      'staff@annapoorna.com': { name: 'Front Desk Staff', role: 'STAFF', pass: 'Staff@123' },
-    };
-
-    const demo = demoAccounts[normalizedEmail];
-    if (demo && demo.pass === password) {
-      const hashed = hashPassword(password);
-      await dbRun(
-        `INSERT OR IGNORE INTO users (tenant_id, restaurant_id, email, password_hash, name, role)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        ['t_annapoorna', 'r_coimbatore_01', normalizedEmail, hashed, demo.name, demo.role]
-      );
-      user = await dbGet('SELECT * FROM users WHERE email = ?', [normalizedEmail]);
-    }
+export async function rotateRefreshToken(refreshTokenString) {
+  const payload = await verifyToken(refreshTokenString);
+  if (payload.type !== 'REFRESH' || !payload.jti) {
+    throw new AppError(401, 'INVALID_REFRESH_TOKEN', 'Supplied token is not a valid refresh token');
   }
 
+  // Check revocation in database
+  const tokenRecord = await dbGet(
+    'SELECT * FROM refresh_tokens WHERE jti = ?',
+    [payload.jti]
+  );
+
+  if (tokenRecord && tokenRecord.revoked_at) {
+    throw new AppError(401, 'REFRESH_TOKEN_REVOKED', 'Refresh token has been revoked. Please log in again.');
+  }
+
+  // Revoke the old refresh token (Single-use rotation)
+  await dbRun(
+    'UPDATE refresh_tokens SET revoked_at = CURRENT_TIMESTAMP WHERE jti = ?',
+    [payload.jti]
+  );
+
+  const user = await dbGet(
+    'SELECT id, email, name, tenant_id, restaurant_id, role FROM users WHERE id = ?',
+    [payload.sub]
+  );
+
   if (!user) {
+    throw new AppError(401, 'USER_NOT_FOUND', 'User belonging to refresh token no longer exists');
+  }
+
+  return generateTokenPair(user);
+}
+
+/**
+ * Authenticate user credentials against database
+ */
+export async function authenticateUser(email, password) {
+  if (!email || !password) {
+    throw new AppError(400, 'VALIDATION_ERROR', 'Email and password are required');
+  }
+
+  const user = await dbGet(
+    'SELECT * FROM users WHERE email = ? AND (status IS NULL OR status = "active")',
+    [email.toLowerCase().trim()]
+  );
+
+  if (!user || !user.password_hash) {
     throw new AppError(401, 'INVALID_CREDENTIALS', 'Invalid email or password');
   }
 
@@ -112,18 +175,20 @@ export async function authenticateUser(email, password) {
     throw new AppError(401, 'INVALID_CREDENTIALS', 'Invalid email or password');
   }
 
-  const token = await generateToken(user);
-
+  const tokenPair = await generateTokenPair(user);
   logger.info(`[Auth] User authenticated: ${user.email} (${user.role})`);
 
   return {
-    token,
+    token: tokenPair.accessToken,
+    accessToken: tokenPair.accessToken,
+    refreshToken: tokenPair.refreshToken,
+    expiresIn: tokenPair.expiresInSeconds,
     user: {
       id: user.id,
       email: user.email,
       name: user.name,
-      tenant_id: user.tenant_id,
-      restaurant_id: user.restaurant_id,
+      tenantId: user.tenant_id,
+      restaurantId: user.restaurant_id,
       role: user.role,
     },
   };

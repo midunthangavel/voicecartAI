@@ -154,18 +154,18 @@ export async function seedDatabase(db) {
 
   // 5. Seed Staff & Admin Users with secure password hashes
   const users = [
-    { email: 'admin@annapoorna.com', name: 'Admin Manager', role: 'ADMIN', pass: 'Annapoorna@123' },
-    { email: 'kitchen@annapoorna.com', name: 'Master Chef', role: 'KITCHEN', pass: 'Kitchen@123' },
-    { email: 'staff@annapoorna.com', name: 'Front Desk Staff', role: 'STAFF', pass: 'Staff@123' },
+    { id: 'usr_admin_01', email: 'admin@annapoorna.com', name: 'Admin Manager', role: 'ADMIN', pass: 'Annapoorna@123' },
+    { id: 'usr_chef_01', email: 'kitchen@annapoorna.com', name: 'Master Chef', role: 'KITCHEN', pass: 'Kitchen@123' },
+    { id: 'usr_staff_01', email: 'staff@annapoorna.com', name: 'Front Desk Staff', role: 'STAFF', pass: 'Staff@123' },
   ];
 
   for (const u of users) {
     const hashed = hashPassword(u.pass);
     await new Promise((resolve, reject) => {
       db.run(
-        `INSERT OR IGNORE INTO users (tenant_id, email, password_hash, name, role)
-         VALUES ('t_annapoorna', ?, ?, ?, ?)`,
-        [u.email, hashed, u.name, u.role],
+        `INSERT OR IGNORE INTO users (id, tenant_id, email, password_hash, name, role)
+         VALUES (?, 't_annapoorna', ?, ?, ?, ?)`,
+        [u.id, u.email, hashed, u.name, u.role],
         err => err ? reject(err) : resolve()
       );
     });

@@ -4,14 +4,27 @@ import { enqueueOutboxEvent } from '../../services/outbox.service.js';
 import { AppError } from '../../utils/AppError.js';
 
 /**
+ * Valid state transition graph for food orders
+ */
+const VALID_TRANSITIONS = {
+  pending: ['confirmed', 'cancelled', 'preparing'],
+  confirmed: ['preparing', 'cancelled'],
+  preparing: ['ready', 'cancelled'],
+  ready: ['dispatched', 'cancelled'],
+  dispatched: ['delivered', 'cancelled'],
+  delivered: [],
+  cancelled: [],
+};
+
+/**
  * Order Repository — Authoritative persistence for orders and line-item snapshots
- * Enforces strict multi-tenant scoping, optimistic concurrency control, soft deletes, and transactional outbox events.
+ * Enforces strict multi-tenant scoping, optimistic concurrency control, state machine validation, and transactional outbox.
  */
 
 export async function createOrderWithSnapshots(orderData, items = []) {
   const {
-    tenant_id = 't_annapoorna',
-    restaurant_id = 'r_coimbatore_01',
+    tenant_id,
+    restaurant_id,
     call_id = null,
     customer_id = null,
     ondc_order_id = null,
@@ -30,6 +43,16 @@ export async function createOrderWithSnapshots(orderData, items = []) {
     customer_phone = null,
   } = orderData;
 
+  const tenantId = tenant_id || 't_annapoorna';
+  const restaurantId = restaurant_id || 'r_coimbatore_01';
+
+  // Monetary values stored in integer paise
+  const subtotalPaise = Math.round(subtotal * 100);
+  const taxPaise = Math.round(tax * 100);
+  const deliveryFeePaise = Math.round(delivery_fee * 100);
+  const discountPaise = Math.round(discount * 100);
+  const totalAmountPaise = Math.round(total_amount * 100);
+
   return transaction(async () => {
     // 1. Insert master order record
     const res = await dbRun(
@@ -39,17 +62,17 @@ export async function createOrderWithSnapshots(orderData, items = []) {
          payment_status, payment_link, delivery_address, landmark, items, scheduled_for, version
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
       [
-        tenant_id,
-        restaurant_id,
+        tenantId,
+        restaurantId,
         call_id,
         customer_id,
         ondc_order_id,
         status,
-        subtotal,
-        tax,
-        delivery_fee,
-        discount,
-        total_amount,
+        subtotalPaise / 100,
+        taxPaise / 100,
+        deliveryFeePaise / 100,
+        discountPaise / 100,
+        totalAmountPaise / 100,
         currency,
         payment_status,
         payment_link,
@@ -66,7 +89,8 @@ export async function createOrderWithSnapshots(orderData, items = []) {
     for (const item of items) {
       const qty = Math.max(1, item.quantity || 1);
       const unitPrice = item.unit_price_snapshot || item.price || 0;
-      const lineTotal = item.line_total || (unitPrice * qty);
+      const unitPricePaise = Math.round(unitPrice * 100);
+      const lineTotalPaise = unitPricePaise * qty;
 
       await dbRun(
         `INSERT INTO order_items (
@@ -76,17 +100,17 @@ export async function createOrderWithSnapshots(orderData, items = []) {
           orderId,
           item.catalog_item_id || null,
           item.name || item.item_name_snapshot || 'Item',
-          unitPrice,
+          unitPricePaise / 100,
           qty,
-          lineTotal,
+          lineTotalPaise / 100,
         ]
       );
     }
 
     // 3. Record Immutable Audit Log within transaction
     await recordAuditLog({
-      tenant_id,
-      restaurant_id,
+      tenant_id: tenantId,
+      restaurant_id: restaurantId,
       actor_type: 'ai_agent',
       actor_id: 'voicecart_dialogue_engine',
       action: 'CREATE_ORDER',
@@ -95,10 +119,10 @@ export async function createOrderWithSnapshots(orderData, items = []) {
       after_state: { orderId, status, total_amount, itemsCount: items.length },
     });
 
-    // 4. Write Transactional Outbox Event (Guaranteed delivery to WhatsApp/KDS/ONDC)
+    // 4. Write Transactional Outbox Event
     await enqueueOutboxEvent({
-      tenant_id,
-      restaurant_id,
+      tenant_id: tenantId,
+      restaurant_id: restaurantId,
       event_type: 'ORDER_CONFIRMED',
       aggregate_type: 'order',
       aggregate_id: orderId,
@@ -117,17 +141,12 @@ export async function createOrderWithSnapshots(orderData, items = []) {
 }
 
 export async function getRecentOrders(options = {}) {
-  let tenantId = 't_annapoorna';
-  let restaurantId = 'r_coimbatore_01';
-  let limit = 50;
+  const tenantId = typeof options === 'object' ? options.tenantId : 't_annapoorna';
+  const restaurantId = typeof options === 'string' ? options : (options.restaurantId || 'r_coimbatore_01');
+  const limit = Math.min(Math.max(parseInt(options.limit, 10) || 50, 1), 100);
 
-  if (typeof options === 'string') {
-    restaurantId = options;
-    limit = arguments[1] || 50;
-  } else {
-    tenantId = options.tenantId || 't_annapoorna';
-    restaurantId = options.restaurantId || 'r_coimbatore_01';
-    limit = Math.min(Math.max(parseInt(options.limit, 10) || 50, 1), 100);
+  if (!tenantId || !restaurantId) {
+    throw new AppError(401, 'AUTH_CONTEXT_MISSING', 'Authenticated tenant and restaurant context is required');
   }
 
   const orders = await dbAll(
@@ -166,8 +185,12 @@ export async function getRecentOrders(options = {}) {
 }
 
 export async function getOrderWithItems(orderId, options = {}) {
-  const tenantId = typeof options === 'object' ? (options.tenantId || 't_annapoorna') : 't_annapoorna';
+  const tenantId = typeof options === 'object' ? options.tenantId : 't_annapoorna';
   const restaurantId = typeof options === 'string' ? options : (options.restaurantId || 'r_coimbatore_01');
+
+  if (!tenantId || !restaurantId) {
+    throw new AppError(401, 'AUTH_CONTEXT_MISSING', 'Authenticated tenant and restaurant context is required');
+  }
 
   const order = await dbGet(
     `SELECT * FROM orders 
@@ -194,9 +217,13 @@ export async function getOrderWithItems(orderId, options = {}) {
 }
 
 export async function updateOrderStatus(orderId, newStatus, options = {}, actor = { type: 'staff', id: 'system' }) {
-  const tenantId = typeof options === 'object' ? (options.tenantId || 't_annapoorna') : 't_annapoorna';
+  const tenantId = typeof options === 'object' ? options.tenantId : 't_annapoorna';
   const restaurantId = typeof options === 'string' ? options : (options.restaurantId || 'r_coimbatore_01');
   const expectedVersion = typeof options === 'object' ? options.expectedVersion : null;
+
+  if (!tenantId || !restaurantId) {
+    throw new AppError(401, 'AUTH_CONTEXT_MISSING', 'Authenticated tenant and restaurant context is required');
+  }
 
   const previous = await dbGet(
     `SELECT * FROM orders WHERE id = ? AND tenant_id = ? AND restaurant_id = ? AND (deleted_at IS NULL)`,
@@ -205,6 +232,12 @@ export async function updateOrderStatus(orderId, newStatus, options = {}, actor 
 
   if (!previous) {
     throw new AppError(404, 'ORDER_NOT_FOUND', `Order #${orderId} not found for this restaurant`);
+  }
+
+  // Authoritative State Machine Validation
+  const allowed = VALID_TRANSITIONS[previous.status];
+  if (allowed && !allowed.includes(newStatus) && previous.status !== newStatus) {
+    throw new AppError(409, 'ILLEGAL_STATE_TRANSITION', `Cannot transition order #${orderId} from "${previous.status}" to "${newStatus}"`);
   }
 
   return transaction(async () => {
@@ -254,8 +287,12 @@ export async function updateOrderStatus(orderId, newStatus, options = {}, actor 
 }
 
 export async function softDeleteOrder(orderId, options = {}, deletedBy = 'admin') {
-  const tenantId = typeof options === 'object' ? (options.tenantId || 't_annapoorna') : 't_annapoorna';
+  const tenantId = typeof options === 'object' ? options.tenantId : 't_annapoorna';
   const restaurantId = typeof options === 'string' ? options : (options.restaurantId || 'r_coimbatore_01');
+
+  if (!tenantId || !restaurantId) {
+    throw new AppError(401, 'AUTH_CONTEXT_MISSING', 'Authenticated tenant and restaurant context is required');
+  }
 
   return transaction(async () => {
     const res = await dbRun(

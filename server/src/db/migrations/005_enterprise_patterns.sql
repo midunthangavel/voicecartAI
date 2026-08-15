@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS outbox_events (
   max_retries INTEGER DEFAULT 5,
   scheduled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   processed_at TIMESTAMP,
+  locked_at TIMESTAMP,
+  locked_by TEXT,
   last_error TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

@@ -107,3 +107,7 @@ async function sendWhatsApp(to, body) {
   console.log(body);
   return { success: true, sid: `mock_wa_${Date.now()}` };
 }
+
+// Export standard aliases
+export const sendOrderReceipt = sendWhatsAppReceipt;
+export const sendPinDropRequest = sendWhatsAppPinDrop;

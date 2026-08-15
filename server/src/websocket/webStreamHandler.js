@@ -19,7 +19,9 @@ export async function handleWebStream(ws, sessions) {
           const session = sessions.get(sessionId);
           if (session?.sttStream) {
             const pcmAudio = Buffer.from(msg.data, 'base64');
-            session.audioChunks.push(pcmAudio);
+            if (session.audioChunks.length < 5000) {
+              session.audioChunks.push(pcmAudio);
+            }
             session.sttStream.write(pcmAudio);
           }
         } else if (msg.type === 'text') {
@@ -30,7 +32,9 @@ export async function handleWebStream(ws, sessions) {
       } else {
         const session = sessions.get(sessionId);
         if (session?.sttStream) {
-          session.audioChunks.push(message);
+          if (session.audioChunks.length < 5000) {
+            session.audioChunks.push(message);
+          }
           session.sttStream.write(message);
         }
       }

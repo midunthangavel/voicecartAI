@@ -9,22 +9,24 @@ import { resolve } from 'path';
 let server;
 let BASE_URL;
 let authToken;
-const TEST_DB = resolve('./test_integration.db');
+const TEST_DB = resolve(`./test_integ_${Date.now()}.db`);
 
 async function getAuthToken() {
   if (authToken) return authToken;
-  const authRes = await fetch(`${BASE_URL}/api/auth/login`, {
+  const authRes = await fetch(`${BASE_URL}/api/v1/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: 'admin@annapoorna.com', password: 'Annapoorna@123' }),
   });
   const authData = await authRes.json();
-  authToken = authData.token;
+  if (!authRes.ok) {
+    throw new Error(`Login failed in test: ${JSON.stringify(authData)}`);
+  }
+  authToken = authData.token || authData.accessToken;
   return authToken;
 }
 
 test.before(async () => {
-  try { if (existsSync(TEST_DB)) unlinkSync(TEST_DB); } catch {}
   process.env.DB_PATH = TEST_DB;
   await initDatabase();
 
