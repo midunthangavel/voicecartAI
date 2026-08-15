@@ -9,8 +9,12 @@ import { broadcastToDashboard } from '../websocket/dashboardWsHandler.js';
  * Handles asynchronous restaurant dispatching via ONDC Beckn protocol or POS integration.
  */
 
-dispatchQueue.process('DISPATCH_ORDER', async (data) => {
-  const { orderId, state, callerPhone, restaurantId = 'r_coimbatore_01' } = data;
+async function processOrderDispatch(data) {
+  const { orderId, state, callerPhone, tenantId, restaurantId } = data;
+
+  if (!tenantId || !restaurantId) {
+    throw new Error('[Worker:Dispatch] Explicit tenantId and restaurantId are required');
+  }
 
   console.log(`[Worker:Dispatch] Dispatching Order #${orderId} for ${callerPhone}...`);
 
@@ -23,10 +27,12 @@ dispatchQueue.process('DISPATCH_ORDER', async (data) => {
       merchant: dispatchResult.merchant,
     });
 
-    await updateOrderStatus(orderId, 'dispatched', restaurantId);
+    await updateOrderStatus(orderId, 'dispatched', { tenantId, restaurantId });
 
     broadcastToDashboard({
       type: 'order_dispatched',
+      tenantId,
+      restaurantId,
       orderId,
       dispatchMode: dispatchResult.dispatch_mode,
       ondcOrderId: dispatchResult.order_id,
@@ -41,6 +47,9 @@ dispatchQueue.process('DISPATCH_ORDER', async (data) => {
   }
 
   throw new Error(`Dispatch failed for Order #${orderId}`);
-});
+}
+
+dispatchQueue.process('DISPATCH_ORDER', processOrderDispatch);
+dispatchQueue.process('DISPATCH_KITCHEN_ORDER', processOrderDispatch);
 
 console.log('[Workers] Dispatch Worker initialized and listening for jobs.');

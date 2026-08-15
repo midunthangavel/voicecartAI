@@ -8,16 +8,25 @@ import { storageService } from '../infra/storageService.js';
  */
 
 recordingQueue.process('PERSIST_CALL_AUDIO', async (data) => {
-  const { callId, callSid, audioChunksBase64, tenantId = 't_annapoorna', restaurantId = 'r_coimbatore_01' } = data;
+  const { callId, callSid, audioBase64, audioChunksBase64, tenantId, restaurantId } = data;
 
-  if (!audioChunksBase64 || audioChunksBase64.length === 0) {
+  if (!tenantId || !restaurantId) {
+    throw new Error('[Worker:Recording] Explicit tenantId and restaurantId are required');
+  }
+
+  let fullAudio = null;
+  if (audioBase64) {
+    fullAudio = Buffer.from(audioBase64, 'base64');
+  } else if (audioChunksBase64 && audioChunksBase64.length > 0) {
+    const buffers = audioChunksBase64.map(b => Buffer.from(b, 'base64'));
+    fullAudio = Buffer.concat(buffers);
+  }
+
+  if (!fullAudio || fullAudio.length === 0) {
     return { skipped: true, reason: 'No audio chunks captured' };
   }
 
   console.log(`[Worker:Recording] Encoding call recording for Call ID ${callId}...`);
-
-  const buffers = audioChunksBase64.map(b => Buffer.from(b, 'base64'));
-  const fullAudio = Buffer.concat(buffers);
 
   // 8kHz, 16-bit linear PCM (2 bytes per sample)
   const durationSeconds = Math.round(fullAudio.length / (8000 * 2));

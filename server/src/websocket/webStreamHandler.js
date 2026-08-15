@@ -7,7 +7,13 @@ export async function handleWebStream(ws, sessions) {
   const sessionId = `web_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
   console.log(`[Web] New browser session: ${sessionId}`);
 
-  await initSession(sessionId, { source: 'web', ws }, sessions);
+  await initSession(sessionId, {
+    source: 'web',
+    ws,
+    tenantId: ws.auth?.tenantId || 't_annapoorna',
+    restaurantId: ws.auth?.restaurantId || 'r_coimbatore_01',
+  }, sessions);
+
   await sendGreeting(sessionId, sessions);
 
   ws.on('message', async (message) => {

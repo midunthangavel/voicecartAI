@@ -17,8 +17,8 @@ function computeAuditHash(previousHash, tenantId, restaurantId, action, resource
  */
 
 export async function recordAuditLog({
-  tenant_id = 't_annapoorna',
-  restaurant_id = 'r_coimbatore_01',
+  tenant_id,
+  restaurant_id,
   actor_type = 'system', // 'ai_agent' | 'staff' | 'kitchen' | 'system' | 'customer'
   actor_id = 'voicecart_agent',
   action, // 'CREATE_ORDER' | 'UPDATE_STATUS' | 'UPDATE_PRICE' | 'DISPATCH_ORDER' | 'FLAG_DISPUTE'
@@ -28,6 +28,9 @@ export async function recordAuditLog({
   after_state = null,
   metadata = {},
 }) {
+  if (!tenant_id || !restaurant_id) {
+    throw new Error('[AuditService] Explicit tenant_id and restaurant_id are required to record audit log');
+  }
   try {
     const afterStateStr = after_state ? JSON.stringify(after_state) : null;
     const beforeStateStr = before_state ? JSON.stringify(before_state) : null;

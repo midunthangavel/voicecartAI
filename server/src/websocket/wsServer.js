@@ -40,7 +40,7 @@ export function createWebSocketCoordinator(httpServer) {
         let user = null;
 
         if (ticket) {
-          user = consumeWsTicket(ticket);
+          user = await consumeWsTicket(ticket);
         }
 
         if (!user && token) {
@@ -79,7 +79,7 @@ export function createWebSocketCoordinator(httpServer) {
 
         let voiceAuth = null;
         if (ticket) {
-          voiceAuth = consumeWsTicket(ticket);
+          voiceAuth = await consumeWsTicket(ticket);
         }
         if (!voiceAuth && token) {
           try {
@@ -102,7 +102,7 @@ export function createWebSocketCoordinator(httpServer) {
         let streamMeta = null;
 
         if (streamTicket) {
-          streamMeta = consumeStreamTicket(streamTicket);
+          streamMeta = await consumeStreamTicket(streamTicket);
         }
 
         if (streamMeta) {

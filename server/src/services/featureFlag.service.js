@@ -6,13 +6,15 @@ import { dbGet, dbRun, dbAll } from '../db.js';
  * Enables safe gradual rollouts, canary features, and tenant-level feature toggles.
  */
 
-export async function isFeatureEnabled(flagKey, tenantId = 't_annapoorna') {
+export async function isFeatureEnabled(flagKey, tenantId = 'global') {
   // 1. Check tenant-specific override
-  const tenantFlag = await dbGet(
-    'SELECT enabled FROM feature_flags WHERE tenant_id = ? AND flag_key = ?',
-    [tenantId, flagKey]
-  );
-  if (tenantFlag) return Boolean(tenantFlag.enabled);
+  if (tenantId && tenantId !== 'global') {
+    const tenantFlag = await dbGet(
+      'SELECT enabled FROM feature_flags WHERE tenant_id = ? AND flag_key = ?',
+      [tenantId, flagKey]
+    );
+    if (tenantFlag) return Boolean(tenantFlag.enabled);
+  }
 
   // 2. Check global setting
   const globalFlag = await dbGet(

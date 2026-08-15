@@ -5,13 +5,23 @@ import { AppError } from '../utils/AppError.js';
 
 /**
  * Controller for Call Statistics and Session Inspection
- * Scoped strictly by server-side authenticated identity (req.auth).
+ * Scoped strictly by server-side authenticated identity (req.auth) — Fail closed.
  */
+
+function enforceAuthContext(req) {
+  const tenantId = req.auth?.tenantId;
+  const restaurantId = req.auth?.restaurantId;
+
+  if (!tenantId || !restaurantId) {
+    throw new AppError(401, 'AUTH_CONTEXT_MISSING', 'Authenticated tenant and restaurant context is required');
+  }
+
+  return { tenantId, restaurantId };
+}
 
 export async function getStats(req, res, next) {
   try {
-    const tenantId = req.auth?.tenantId || 't_annapoorna';
-    const restaurantId = req.auth?.restaurantId || 'r_coimbatore_01';
+    const { tenantId, restaurantId } = enforceAuthContext(req);
 
     const totalCalls = await dbGet('SELECT COUNT(*) as count FROM calls WHERE tenant_id = ? AND restaurant_id = ?', [tenantId, restaurantId]);
     const activeCalls = await dbGet("SELECT COUNT(*) as count FROM calls WHERE tenant_id = ? AND restaurant_id = ? AND status = 'active'", [tenantId, restaurantId]);
@@ -35,8 +45,7 @@ export async function getStats(req, res, next) {
 
 export async function getRecentCalls(req, res, next) {
   try {
-    const tenantId = req.auth?.tenantId || 't_annapoorna';
-    const restaurantId = req.auth?.restaurantId || 'r_coimbatore_01';
+    const { tenantId, restaurantId } = enforceAuthContext(req);
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 100);
 
     const calls = await dbAll(
@@ -55,21 +64,23 @@ export async function getRecentCalls(req, res, next) {
 
 export async function getCallById(req, res, next) {
   try {
-    const tenantId = req.auth?.tenantId || 't_annapoorna';
-    const restaurantId = req.auth?.restaurantId || 'r_coimbatore_01';
+    const { tenantId, restaurantId } = enforceAuthContext(req);
 
     const call = await dbGet(
       'SELECT * FROM calls WHERE id = ? AND tenant_id = ? AND restaurant_id = ?',
       [req.params.id, tenantId, restaurantId]
     );
-    if (!call) return next(new AppError(404, 'CALL_NOT_FOUND', `Call #${req.params.id} not found`));
+    if (!call) throw new AppError(404, 'CALL_NOT_FOUND', 'Call not found');
 
-    const logs = await dbAll('SELECT * FROM call_logs WHERE call_id = ? ORDER BY created_at ASC', [req.params.id]);
+    const logs = await dbAll(
+      'SELECT * FROM call_logs WHERE call_id = ? ORDER BY timestamp ASC',
+      [req.params.id]
+    );
 
     res.json({
       ...call,
-      session_state: typeof call.session_state === 'string' ? JSON.parse(call.session_state || '{}') : (call.session_state || {}),
-      transcript: typeof call.transcript === 'string' ? JSON.parse(call.transcript || '[]') : (call.transcript || []),
+      session_state: typeof call.session_state === 'string' ? JSON.parse(call.session_state || '{}') : call.session_state,
+      transcript: typeof call.transcript === 'string' ? JSON.parse(call.transcript || '[]') : call.transcript,
       logs,
     });
   } catch (err) {
@@ -79,29 +90,23 @@ export async function getCallById(req, res, next) {
 
 export async function getCallAudio(req, res, next) {
   try {
-    const tenantId = req.auth?.tenantId || 't_annapoorna';
-    const restaurantId = req.auth?.restaurantId || 'r_coimbatore_01';
+    const { tenantId, restaurantId } = enforceAuthContext(req);
 
-    // Verify that call belongs to authenticated restaurant
     const call = await dbGet(
-      'SELECT id FROM calls WHERE id = ? AND tenant_id = ? AND restaurant_id = ?',
+      'SELECT * FROM calls WHERE id = ? AND tenant_id = ? AND restaurant_id = ?',
       [req.params.id, tenantId, restaurantId]
     );
-    if (!call) return next(new AppError(404, 'CALL_NOT_FOUND', `Call #${req.params.id} not found`));
+    if (!call) throw new AppError(404, 'CALL_NOT_FOUND', 'Call not found');
 
-    const recording = await dbGet('SELECT * FROM call_recordings WHERE call_id = ?', [req.params.id]);
-    if (!recording || !recording.audio_path) {
-      return next(new AppError(404, 'RECORDING_NOT_FOUND', 'No audio recording found for this call'));
-    }
+    const storagePath = call.recording_url || `./recordings/call_${call.id}.wav`;
+    const fullPath = pathResolve(storagePath);
 
-    const filePath = pathResolve(recording.audio_path);
-    if (!existsSync(filePath)) {
-      return next(new AppError(404, 'AUDIO_FILE_MISSING', 'Recording file not present on storage'));
+    if (!existsSync(fullPath)) {
+      throw new AppError(404, 'AUDIO_NOT_FOUND', 'Audio recording not found for this call');
     }
 
     res.setHeader('Content-Type', 'audio/wav');
-    res.setHeader('Content-Disposition', `inline; filename="call_${req.params.id}.wav"`);
-    createReadStream(filePath).pipe(res);
+    createReadStream(fullPath).pipe(res);
   } catch (err) {
     next(err);
   }

@@ -145,14 +145,16 @@ export async function upsertCustomerProfile({ phone, restaurant_id = 'r_coimbato
   return { id: res.lastID, restaurant_id, phone, name, dietary_preference, preferred_language, total_orders: 0 };
 }
 
-export async function incrementCustomerOrders(phone, restaurantId = 'r_coimbatore_01') {
+export async function incrementCustomerOrders(phone, restaurantId) {
+  if (!restaurantId) throw new Error('[DB] restaurantId is required to increment orders');
   return dbRun(
     'UPDATE customers SET total_orders = total_orders + 1, updated_at = CURRENT_TIMESTAMP WHERE phone = ? AND restaurant_id = ?',
     [phone, restaurantId]
   );
 }
 
-export async function getSavedAddresses(phone, restaurantId = 'r_coimbatore_01') {
+export async function getSavedAddresses(phone, restaurantId) {
+  if (!restaurantId) throw new Error('[DB] restaurantId is required to get saved addresses');
   const customer = await getCustomerProfile(phone, restaurantId);
   if (!customer) return [];
   try {
@@ -162,7 +164,8 @@ export async function getSavedAddresses(phone, restaurantId = 'r_coimbatore_01')
   }
 }
 
-export async function saveCustomerAddress({ phone, restaurant_id = 'r_coimbatore_01', label = 'Home', spoken_address, landmark = null, formatted_address = null, latitude = null, longitude = null, is_default = 0 }) {
+export async function saveCustomerAddress({ phone, restaurant_id, label = 'Home', spoken_address, landmark = null, formatted_address = null, latitude = null, longitude = null, is_default = 0 }) {
+  if (!restaurant_id) throw new Error('[DB] restaurant_id is required to save customer address');
   const customer = await upsertCustomerProfile({ phone, restaurant_id });
   if (is_default) {
     await dbRun('UPDATE customer_addresses SET is_default = 0 WHERE customer_id = ?', [customer.id]);
@@ -182,7 +185,8 @@ export async function saveCustomerAddress({ phone, restaurant_id = 'r_coimbatore
   }
 }
 
-export async function getLastOrderForPhone(phone, restaurantId = 'r_coimbatore_01') {
+export async function getLastOrderForPhone(phone, restaurantId) {
+  if (!restaurantId) throw new Error('[DB] restaurantId is required to get last order');
   const customer = await getCustomerProfile(phone, restaurantId);
   if (!customer) return null;
   return dbGet('SELECT * FROM orders WHERE customer_id = ? AND restaurant_id = ? ORDER BY created_at DESC LIMIT 1', [customer.id, restaurantId]);

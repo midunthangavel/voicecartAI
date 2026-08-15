@@ -1,98 +1,85 @@
 import crypto from 'crypto';
+import { redisClient } from '../infra/redisClient.js';
 
-const TICKET_TTL_MS = 30 * 1000; // 30 seconds for dashboard & web
-const STREAM_TICKET_TTL_MS = 60 * 1000; // 60 seconds for telephony streams
-
-const activeTickets = new Map();
-const activeStreamTickets = new Map();
+const TICKET_TTL_SECONDS = 30; // 30 seconds for dashboard & web
+const STREAM_TICKET_TTL_SECONDS = 60; // 60 seconds for telephony streams
 
 /**
  * Generate a single-use short-lived WebSocket authentication ticket for dashboard/web
+ * Persisted in Redis / distributed cache with TTL for multi-instance scalability.
  */
-export function createWsTicket(userContext) {
+export async function createWsTicket(userContext) {
   const ticket = `wst_${Date.now()}_${crypto.randomBytes(16).toString('hex')}`;
 
-  activeTickets.set(ticket, {
-    auth: {
-      userId: userContext.userId || userContext.sub,
-      email: userContext.email,
-      name: userContext.name,
-      tenantId: userContext.tenantId || userContext.tenant_id,
-      restaurantId: userContext.restaurantId || userContext.restaurant_id,
-      role: userContext.role || 'STAFF',
-    },
-    expiresAt: Date.now() + TICKET_TTL_MS,
-  });
+  const authData = {
+    userId: userContext.userId || userContext.sub,
+    email: userContext.email,
+    name: userContext.name,
+    tenantId: userContext.tenantId || userContext.tenant_id,
+    restaurantId: userContext.restaurantId || userContext.restaurant_id,
+    role: userContext.role || 'STAFF',
+  };
 
-  return { ticket, expiresInSeconds: 30 };
+  await redisClient.set(`wst:${ticket}`, JSON.stringify(authData), 'EX', TICKET_TTL_SECONDS);
+
+  return { ticket, expiresInSeconds: TICKET_TTL_SECONDS };
 }
 
 /**
- * Consume and immediately invalidate a single-use WebSocket ticket
+ * Consume and immediately invalidate a single-use WebSocket ticket atomically across cluster
  */
-export function consumeWsTicket(ticket) {
+export async function consumeWsTicket(ticket) {
   if (!ticket || typeof ticket !== 'string') return null;
 
-  const record = activeTickets.get(ticket);
+  const key = `wst:${ticket}`;
+  const record = await redisClient.get(key);
   if (!record) return null;
 
   // Single-use: delete immediately
-  activeTickets.delete(ticket);
+  await redisClient.del(key);
 
-  if (Date.now() > record.expiresAt) {
-    return null; // Expired
+  try {
+    return typeof record === 'string' ? JSON.parse(record) : record;
+  } catch {
+    return null;
   }
-
-  return record.auth;
 }
 
 /**
  * Generate a single-use signed stream ticket for Twilio/Exotel media streams
+ * Persisted in Redis / distributed cache with TTL.
  */
-export function createStreamTicket(callMetadata = {}) {
+export async function createStreamTicket(callMetadata = {}) {
   const ticket = `strm_${Date.now()}_${crypto.randomBytes(16).toString('hex')}`;
 
-  activeStreamTickets.set(ticket, {
-    metadata: {
-      callSid: callMetadata.callSid,
-      provider: callMetadata.provider || 'twilio',
-      callerPhone: callMetadata.callerPhone,
-      tenantId: callMetadata.tenantId,
-      restaurantId: callMetadata.restaurantId,
-    },
-    expiresAt: Date.now() + STREAM_TICKET_TTL_MS,
-  });
+  const metaData = {
+    callSid: callMetadata.callSid,
+    provider: callMetadata.provider || 'twilio',
+    callerPhone: callMetadata.callerPhone,
+    tenantId: callMetadata.tenantId,
+    restaurantId: callMetadata.restaurantId,
+  };
+
+  await redisClient.set(`strm:${ticket}`, JSON.stringify(metaData), 'EX', STREAM_TICKET_TTL_SECONDS);
 
   return ticket;
 }
 
 /**
- * Consume and invalidate a single-use stream ticket
+ * Consume and invalidate a single-use stream ticket atomically across cluster
  */
-export function consumeStreamTicket(ticket) {
+export async function consumeStreamTicket(ticket) {
   if (!ticket || typeof ticket !== 'string') return null;
 
-  const record = activeStreamTickets.get(ticket);
+  const key = `strm:${ticket}`;
+  const record = await redisClient.get(key);
   if (!record) return null;
 
-  activeStreamTickets.delete(ticket);
+  await redisClient.del(key);
 
-  if (Date.now() > record.expiresAt) {
+  try {
+    return typeof record === 'string' ? JSON.parse(record) : record;
+  } catch {
     return null;
   }
-
-  return record.metadata;
 }
-
-/**
- * Cleanup expired tickets periodic sweep
- */
-setInterval(() => {
-  const now = Date.now();
-  for (const [ticket, record] of activeTickets.entries()) {
-    if (now > record.expiresAt) activeTickets.delete(ticket);
-  }
-  for (const [ticket, record] of activeStreamTickets.entries()) {
-    if (now > record.expiresAt) activeStreamTickets.delete(ticket);
-  }
-}, 60000);

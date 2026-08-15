@@ -109,4 +109,5 @@ export function getRedisClient() {
   return redisInstance;
 }
 
-export default getRedisClient();
+export const redisClient = getRedisClient();
+export default redisClient;

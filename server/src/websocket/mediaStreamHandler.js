@@ -30,6 +30,8 @@ export async function handleTwilioStream(ws, sessions) {
             ws,
             streamSid,
             callSid,
+            tenantId: ws.streamMeta?.tenantId || 't_annapoorna',
+            restaurantId: ws.streamMeta?.restaurantId || 'r_coimbatore_01',
           }, sessions);
 
           await sendGreeting(sessionId, sessions);
@@ -58,7 +60,9 @@ export async function handleTwilioStream(ws, sessions) {
   });
 
   ws.on('close', async () => {
-    console.log('[Twilio] WebSocket closed');
-    if (sessionId) await endSession(sessionId, sessions);
+    console.log(`[Twilio] Connection closed: ${sessionId}`);
+    if (sessionId) {
+      await endSession(sessionId, sessions);
+    }
   });
 }

@@ -8,9 +8,9 @@ const LOCAL_STORAGE_DIR = resolve('.', 'recordings');
 fs.mkdir(LOCAL_STORAGE_DIR, { recursive: true }).catch(() => {});
 
 /**
- * Non-Blocking Object Storage Service
+ * Non-Blocking Cloud & Local Object Storage Service
  * 
- * Supports asynchronous local filesystem persistence and S3/MinIO/GCS cloud upload.
+ * Supports asynchronous local filesystem persistence and S3/MinIO/R2 cloud storage.
  */
 export class StorageService {
   constructor() {
@@ -20,7 +20,7 @@ export class StorageService {
   }
 
   /**
-   * Generates a structured object key
+   * Generates a structured multi-tenant object key
    */
   generateObjectKey({ tenantId, restaurantId, callId, extension = 'wav' }) {
     if (!tenantId || !restaurantId) {
@@ -33,24 +33,49 @@ export class StorageService {
   }
 
   /**
-   * Save call audio buffer asynchronously
+   * Save call audio buffer asynchronously with multi-tenant directory scoping
    * @param {Buffer} audioBuffer - Audio buffer (WAV/PCM)
    * @param {Object} metadata - { callId, tenantId, restaurantId }
    */
   async saveAudio(audioBuffer, metadata = {}) {
+    if (!metadata.tenantId || !metadata.restaurantId) {
+      throw new Error('[StorageService] Explicit tenantId and restaurantId are required to persist audio');
+    }
+
     const objectKey = this.generateObjectKey({
-      tenantId: metadata.tenantId || 't_annapoorna',
-      restaurantId: metadata.restaurantId || 'r_coimbatore_01',
+      tenantId: metadata.tenantId,
+      restaurantId: metadata.restaurantId,
       callId: metadata.callId,
       extension: 'wav',
     });
 
+    const tenantDir = join(LOCAL_STORAGE_DIR, metadata.tenantId, metadata.restaurantId);
+    await fs.mkdir(tenantDir, { recursive: true });
+
     const localFileName = `call_${metadata.callId || Date.now()}.wav`;
-    const localFilePath = join(LOCAL_STORAGE_DIR, localFileName);
+    const localFilePath = join(tenantDir, localFileName);
 
     // Non-blocking asynchronous file write
     await fs.writeFile(localFilePath, audioBuffer);
     logger.info(`[Storage] Persisted audio file asynchronously: ${localFilePath} (${audioBuffer.length} bytes)`);
+
+    // If Cloud S3/R2/MinIO endpoint is configured, upload via HTTP PUT
+    if (this.isCloud && this.s3Endpoint) {
+      try {
+        const cloudUrl = `${this.s3Endpoint.replace(/\/$/, '')}/${this.bucket}/${objectKey}`;
+        await fetch(cloudUrl, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'audio/wav',
+            'Content-Length': String(audioBuffer.length),
+          },
+          body: audioBuffer,
+        });
+        logger.info(`[Storage] Cloud S3 object stored successfully: ${cloudUrl}`);
+      } catch (err) {
+        logger.warn(`[Storage] Cloud S3 upload failed, retained on disk:`, err.message);
+      }
+    }
 
     const publicUrl = process.env.PUBLIC_URL || `http://localhost:${process.env.PORT || 3001}`;
     const playbackUrl = `${publicUrl}/api/v1/calls/${metadata.callId || '1'}/audio`;
@@ -68,15 +93,25 @@ export class StorageService {
    * Retrieve audio buffer asynchronously
    */
   async getAudio(storagePath) {
-    if (!storagePath) return null;
     try {
-      await fs.access(storagePath);
       return await fs.readFile(storagePath);
-    } catch {
+    } catch (err) {
+      logger.error(`[Storage] Failed to read audio at ${storagePath}:`, err.message);
       return null;
+    }
+  }
+
+  /**
+   * Delete audio asynchronously
+   */
+  async deleteAudio(storagePath) {
+    try {
+      await fs.unlink(storagePath);
+      return true;
+    } catch {
+      return false;
     }
   }
 }
 
 export const storageService = new StorageService();
-export default storageService;

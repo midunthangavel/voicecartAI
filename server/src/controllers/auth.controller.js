@@ -34,7 +34,7 @@ export async function getWsTicket(req, res, next) {
     if (!req.auth) {
       throw new AppError(401, 'AUTH_REQUIRED', 'Authentication required to acquire WebSocket ticket');
     }
-    const ticketData = createWsTicket(req.auth);
+    const ticketData = await createWsTicket(req.auth);
     res.json(ticketData);
   } catch (err) {
     next(err);

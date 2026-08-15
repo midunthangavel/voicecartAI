@@ -49,14 +49,14 @@ export function broadcastToDashboard(event) {
   for (const client of dashboardClients) {
     if (client.readyState === WebSocket.OPEN && client.auth) {
       try {
-        // Enforce strict tenant boundary
-        if (event.tenantId && client.auth.tenantId && client.auth.tenantId !== event.tenantId) {
-          continue;
-        }
-
-        // Enforce restaurant boundary (ADMIN role can see all within their tenant)
-        if (event.restaurantId && client.auth.restaurantId && client.auth.restaurantId !== event.restaurantId && client.auth.role !== 'ADMIN') {
-          continue;
+        // Enforce strict fail-closed tenant boundary
+        if (!event.isGlobal) {
+          if (!event.tenantId || client.auth.tenantId !== event.tenantId) {
+            continue;
+          }
+          if (event.restaurantId && client.auth.restaurantId !== event.restaurantId && client.auth.role !== 'ADMIN') {
+            continue;
+          }
         }
 
         client.send(message);

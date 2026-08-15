@@ -153,12 +153,20 @@ export class JobQueue extends EventEmitter {
     const processor = this.processors.get(jobRecord.job_type) || this.processors.get('__default__');
 
     if (!processor) {
-      logger.warn(`[DurableQueue:${this.name}] No processor registered for job type "${jobRecord.job_type}". Re-queuing.`);
+      const errMessage = `Unsupported job type: "${jobRecord.job_type}" has no registered processor on queue "${this.name}"`;
+      logger.error(`[DurableQueue:${this.name}] ${errMessage}. Moving job #${jobRecord.id} directly to DLQ.`);
       await dbRun(
-        `UPDATE durable_job_queue SET status = 'pending', locked_by = NULL WHERE id = ?`,
-        [jobRecord.id]
+        `UPDATE durable_job_queue 
+         SET status = 'dlq', 
+             last_error = ?, 
+             locked_by = NULL, 
+             processed_at = CURRENT_TIMESTAMP 
+         WHERE id = ?`,
+        [errMessage, jobRecord.id]
       );
+      this.emit('failed', jobRecord, new Error(errMessage));
       this.runningCount--;
+      setImmediate(() => this._drain());
       return;
     }
 

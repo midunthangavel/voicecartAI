@@ -36,8 +36,17 @@ protectedApi.get('/stats', getStats);
 protectedApi.get('/engine-status', getEngineStatus);
 protectedApi.get('/sessions', requireRole(ROLES.STAFF, ROLES.RESTAURANT_MANAGER, ROLES.ADMIN), (req, res) => {
   const active = [];
-  const targetTenant = req.auth?.tenantId || 't_annapoorna';
+  const reqTenantId = req.auth?.tenantId;
+  const reqRestaurantId = req.auth?.restaurantId;
+
   for (const [id, session] of sessions) {
+    if (session.tenantId && reqTenantId && session.tenantId !== reqTenantId) {
+      continue;
+    }
+    if (req.auth?.role !== 'ADMIN' && session.restaurantId && reqRestaurantId && session.restaurantId !== reqRestaurantId) {
+      continue;
+    }
+
     active.push({
       id,
       caller_phone: session.callerPhone || 'Browser',
@@ -46,6 +55,8 @@ protectedApi.get('/sessions', requireRole(ROLES.STAFF, ROLES.RESTAURANT_MANAGER,
       transcript: session.conversationHistory,
       startedAt: session.startedAt,
       latencies: session.latencies,
+      tenantId: session.tenantId,
+      restaurantId: session.restaurantId,
     });
   }
   res.json(active);

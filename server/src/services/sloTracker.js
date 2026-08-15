@@ -12,7 +12,10 @@ const SLO_TARGETS = {
   max_error_rate: { target_percent: 1.0, description: 'System-wide error rate <1%' },
 };
 
-export async function getSloMetrics(tenantId = 't_annapoorna') {
+export async function getSloMetrics(tenantId) {
+  if (!tenantId) {
+    throw new Error('[SloTracker] Explicit tenantId is required to query SLO metrics');
+  }
   const callStats = await dbGet(
     `SELECT 
        COUNT(*) as total_calls,

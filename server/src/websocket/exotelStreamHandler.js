@@ -34,6 +34,8 @@ export function handleExotelStream(ws, req, sessions) {
             streamSid,
             callSid,
             callerPhone,
+            tenantId: ws.streamMeta?.tenantId || 't_annapoorna',
+            restaurantId: ws.streamMeta?.restaurantId || 'r_coimbatore_01',
           }, sessions);
 
           await sendGreeting(sessionId, sessions);
@@ -41,37 +43,37 @@ export function handleExotelStream(ws, req, sessions) {
         }
 
         case 'media': {
-          const session = sessions.get(sessionId);
-          if (session && msg.media?.payload) {
-            const rawChunk = Buffer.from(msg.media.payload, 'base64');
-            session.audioChunks.push(rawChunk);
-            session.sttStream?.write(rawChunk);
+          if (sessionId && sessions.has(sessionId)) {
+            const session = sessions.get(sessionId);
+            const rawAudio = msg.media?.payload || msg.payload;
+            if (rawAudio && session.sttStream) {
+              const audioBuffer = Buffer.from(rawAudio, 'base64');
+              if (session.audioChunks.length < 5000) {
+                session.audioChunks.push(audioBuffer);
+              }
+              session.sttStream.write(audioBuffer);
+            }
           }
           break;
         }
 
         case 'stop': {
           console.log(`[ExotelStream] Call stopped: ${sessionId}`);
-          await endSession(sessionId, sessions);
+          if (sessionId && sessions.has(sessionId)) {
+            await endSession(sessionId, sessions);
+          }
           break;
         }
-
-        default:
-          break;
       }
     } catch (err) {
-      console.error('[ExotelStream] Message handling error:', err.message);
+      console.error('[ExotelStream] Error processing message:', err.message);
     }
   });
 
   ws.on('close', async () => {
-    console.log(`[ExotelStream] WebSocket closed for session: ${sessionId}`);
+    console.log(`[ExotelStream] Connection closed: ${sessionId}`);
     if (sessionId && sessions.has(sessionId)) {
       await endSession(sessionId, sessions);
     }
-  });
-
-  ws.on('error', (err) => {
-    console.error(`[ExotelStream] WebSocket error on ${sessionId}:`, err.message);
   });
 }

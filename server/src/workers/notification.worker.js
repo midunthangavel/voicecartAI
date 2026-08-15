@@ -7,8 +7,7 @@ import { sendWhatsAppReceipt, sendWhatsAppPinDrop } from '../services/whatsappSe
  * Handles WhatsApp receipts, SMS order confirmations, and Pin-Drop messaging asynchronously.
  */
 
-// Processor: Complete Order Notification Suite
-notificationQueue.process('SEND_ORDER_NOTIFICATION', async (data) => {
+async function processOrderNotification(data) {
   const { orderId, total, phone, items, deliveryAddress } = data;
   if (!phone || phone === 'Browser') {
     return { skipped: true, reason: 'Non-PSTN browser test session' };
@@ -53,7 +52,11 @@ notificationQueue.process('SEND_ORDER_NOTIFICATION', async (data) => {
   }
 
   return { success: true, orderId, paymentUrl };
-});
+}
+
+// Register explicit processors for both job names
+notificationQueue.process('SEND_ORDER_NOTIFICATION', processOrderNotification);
+notificationQueue.process('SEND_ORDER_RECEIPT_WHATSAPP', processOrderNotification);
 
 // Processor: Pin-Drop Location Request
 notificationQueue.process('SEND_PINDROP_WHATSAPP', async (data) => {

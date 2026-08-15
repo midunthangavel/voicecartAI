@@ -15,15 +15,19 @@ import '../workers/dispatch.worker.js';
 import '../workers/recording.worker.js';
 
 /**
- * Initialize a new voice session with Ephemeral Redis/Memory Cache
+ * Initialize a new voice session with Ephemeral Cache & Authoritative Tenant Context
  */
 export async function initSession(sessionId, opts, sessions) {
+  const tenantId = opts.tenantId || 't_annapoorna';
+  const restaurantId = opts.restaurantId || 'r_coimbatore_01';
   const state = getInitialState(opts.callerPhone);
   const sttStream = await createSttStream('en-IN');
 
   const session = {
     id: sessionId,
     source: opts.source,
+    tenantId,
+    restaurantId,
     callerPhone: opts.callerPhone || 'Browser',
     ws: opts.ws,
     streamSid: opts.streamSid,
@@ -41,6 +45,8 @@ export async function initSession(sessionId, opts, sessions) {
     broadcastToDashboard({
       type: 'stt_transcript',
       sessionId,
+      tenantId: session.tenantId,
+      restaurantId: session.restaurantId,
       ...result,
     });
 
@@ -61,6 +67,8 @@ export async function initSession(sessionId, opts, sessions) {
   // Store in ephemeral cache
   await createSession(sessionId, {
     source: opts.source,
+    tenantId: session.tenantId,
+    restaurantId: session.restaurantId,
     callerPhone: session.callerPhone,
     state,
   });
@@ -81,7 +89,14 @@ export async function initSession(sessionId, opts, sessions) {
     } catch {}
   }
 
-  broadcastToDashboard({ type: 'call_started', sessionId, source: opts.source });
+  broadcastToDashboard({
+    type: 'call_started',
+    sessionId,
+    tenantId: session.tenantId,
+    restaurantId: session.restaurantId,
+    source: opts.source,
+  });
+
   return session;
 }
 
@@ -125,6 +140,8 @@ export async function processUserInput(sessionId, transcript, sessions) {
     broadcastToDashboard({
       type: 'user_speech',
       sessionId,
+      tenantId: session.tenantId,
+      restaurantId: session.restaurantId,
       transcript,
     });
 
@@ -151,6 +168,8 @@ export async function processUserInput(sessionId, transcript, sessions) {
     broadcastToDashboard({
       type: 'ai_response',
       sessionId,
+      tenantId: session.tenantId,
+      restaurantId: session.restaurantId,
       response_text: result.response_text,
       state: result.updated_state,
       provider: result.provider,
@@ -207,6 +226,8 @@ export async function sendAudioResponse(sessionId, text, language, sessions) {
     broadcastToDashboard({
       type: 'tts_complete',
       sessionId,
+      tenantId: session.tenantId,
+      restaurantId: session.restaurantId,
       text,
       audio_duration: getAudioDuration(audioBuffer),
       latency_ms: ttsLatency,
@@ -288,16 +309,22 @@ export async function handleOrderConfirmation(sessionId, sessions) {
 
             if (needsPinDrop(geoResult.confidence)) {
               const pinUrl = generatePinDropUrl(session.id, geoResult.latitude, geoResult.longitude);
-              notificationQueue.add('SEND_PINDROP_WHATSAPP', { phone: session.callerPhone, pinUrl });
+              notificationQueue.add('SEND_PINDROP_WHATSAPP', {
+                tenantId: session.tenantId,
+                restaurantId: session.restaurantId,
+                phone: session.callerPhone,
+                pinUrl,
+              });
             }
           }
         })
         .catch(() => {});
     }
 
-    // 2. Authoritatively persist master order & line-item snapshots
+    // 2. Authoritatively persist master order & line-item snapshots using session tenant context
     const dbOrderId = await createOrderWithSnapshots({
-      restaurant_id: 'r_coimbatore_01',
+      tenant_id: session.tenantId,
+      restaurant_id: session.restaurantId,
       call_id: session.dbId || null,
       status: 'confirmed',
       subtotal: session.state.subtotal || 0,
@@ -317,16 +344,19 @@ export async function handleOrderConfirmation(sessionId, sessions) {
     }
 
     // 3. Offload Dispatch to Asynchronous Dispatch Worker
-    dispatchQueue.add('DISPATCH_ORDER', {
+    dispatchQueue.add('DISPATCH_KITCHEN_ORDER', {
       orderId: dbOrderId,
+      tenantId: session.tenantId,
+      restaurantId: session.restaurantId,
       state: session.state,
       callerPhone: session.callerPhone,
-      restaurantId: 'r_coimbatore_01',
     });
 
     // 4. Offload SMS & WhatsApp Notifications to Asynchronous Notification Worker
-    notificationQueue.add('SEND_ORDER_NOTIFICATION', {
+    notificationQueue.add('SEND_ORDER_RECEIPT_WHATSAPP', {
       orderId: dbOrderId,
+      tenantId: session.tenantId,
+      restaurantId: session.restaurantId,
       total: session.state.total,
       phone: session.callerPhone,
       items: session.state.items,
@@ -335,6 +365,9 @@ export async function handleOrderConfirmation(sessionId, sessions) {
 
     broadcastToDashboard({
       type: 'order_confirmed',
+      sessionId,
+      tenantId: session.tenantId,
+      restaurantId: session.restaurantId,
       orderId: dbOrderId,
       order: session.state,
       callerPhone: session.callerPhone,
@@ -361,11 +394,13 @@ export async function endSession(sessionId, sessions) {
 
     // Offload audio writing & duration calculation to Recording Worker
     if (session.audioChunks && session.audioChunks.length > 0) {
-      const audioChunksBase64 = session.audioChunks.map(c => c.toString('base64'));
+      const combinedAudioBase64 = Buffer.concat(session.audioChunks).toString('base64');
       recordingQueue.add('PERSIST_CALL_AUDIO', {
         callId: session.dbId,
         callSid: session.callSid || session.id,
-        audioChunksBase64,
+        tenantId: session.tenantId,
+        restaurantId: session.restaurantId,
+        audioBase64: combinedAudioBase64,
       });
     }
   }
@@ -373,6 +408,8 @@ export async function endSession(sessionId, sessions) {
   broadcastToDashboard({
     type: 'call_ended',
     sessionId,
+    tenantId: session.tenantId,
+    restaurantId: session.restaurantId,
     summary: {
       totalTurns: session.conversationHistory.length,
       finalState: session.state,

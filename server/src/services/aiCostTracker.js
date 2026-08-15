@@ -14,8 +14,8 @@ const MODEL_RATES_INR = {
  * Record AI inference tokens and calculate estimated cost
  */
 export async function trackAiUsage({
-  tenant_id = 't_annapoorna',
-  restaurant_id = 'r_coimbatore_01',
+  tenant_id,
+  restaurant_id,
   call_id = null,
   provider = 'groq',
   model = 'llama-3.3-70b-versatile',
@@ -23,6 +23,9 @@ export async function trackAiUsage({
   completion_tokens = 0,
   latency_ms = 0,
 }) {
+  if (!tenant_id || !restaurant_id) {
+    throw new Error('[AiCostTracker] Explicit tenant_id and restaurant_id are required to record AI usage');
+  }
   const total_tokens = prompt_tokens + completion_tokens;
   const rate = MODEL_RATES_INR[model] || 0.03;
   const estimated_cost_inr = (total_tokens / 1000) * rate;
@@ -56,7 +59,10 @@ export async function trackAiUsage({
 /**
  * Get aggregated daily AI spend for a tenant
  */
-export async function getTenantDailyAiSpend(tenantId = 't_annapoorna') {
+export async function getTenantDailyAiSpend(tenantId) {
+  if (!tenantId) {
+    throw new Error('[AiCostTracker] Explicit tenantId is required to query AI spend');
+  }
   const row = await dbGet(
     `SELECT 
        COUNT(*) as total_requests,
