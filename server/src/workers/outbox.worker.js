@@ -23,7 +23,7 @@ async function processOutboxEvent(event) {
 
         // 1. Enqueue WhatsApp notification job with idempotency key
         if (phone) {
-          await enqueueNotificationJob({
+          await enqueueNotificationJob('SEND_NOTIFICATION', {
             type: 'order_receipt',
             idempotencyKey: `notif_receipt_order_${orderId}`,
             phone,
@@ -36,7 +36,7 @@ async function processOutboxEvent(event) {
         }
 
         // 2. Enqueue Kitchen Dispatch job with idempotency key
-        await enqueueDispatchJob({
+        await enqueueDispatchJob('DISPATCH_ORDER', {
           type: 'DISPATCH_ORDER',
           idempotencyKey: `dispatch_order_${orderId}`,
           orderId,
@@ -123,6 +123,7 @@ export function initOutboxWorker(intervalMs = 3000) {
   logger.info('[Workers] Transactional Outbox Worker initialized.');
   pollOutboxQueue();
   workerTimer = setInterval(pollOutboxQueue, intervalMs);
+  if (workerTimer.unref) workerTimer.unref();
   return workerTimer;
 }
 

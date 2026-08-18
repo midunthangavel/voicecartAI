@@ -46,3 +46,28 @@ test('DTMF Service: TwiML IVR Greeting Generation', () => {
   assert.ok(twiml.includes('<Gather input="dtmf"'));
   assert.ok(twiml.includes('Press 1 to instantly reorder'));
 });
+
+test('STT Service: Universal Audio Buffer Transcription', async () => {
+  const { transcribeAudioBuffer } = await import('../src/services/sttService.js');
+  
+  // Test with a mock binary audio buffer (e.g. simulated M4A audio)
+  const dummyBuffer = Buffer.from('RIFF....WAVEfmt ....data....', 'utf-8');
+  const result = await transcribeAudioBuffer(dummyBuffer, 'm4a', 'en');
+
+  assert.ok(result);
+  assert.ok(typeof result.transcript === 'string');
+  assert.ok(result.transcript.length > 0);
+  assert.ok(result.confidence > 0);
+  assert.ok(result.provider);
+});
+
+test('TTS Service: Speech Synthesis and Audio Duration', async () => {
+  const { synthesizeSpeech, getAudioDuration } = await import('../src/services/ttsService.js');
+  
+  const buffer = await synthesizeSpeech('Your order for Chicken Biryani is confirmed', 'en-IN');
+  assert.ok(buffer instanceof Buffer);
+  assert.ok(buffer.length > 0);
+
+  const duration = getAudioDuration(buffer);
+  assert.ok(duration > 0);
+});

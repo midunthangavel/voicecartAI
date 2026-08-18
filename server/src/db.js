@@ -3,14 +3,20 @@ import { runMigrations } from './db/migrations/migrationRunner.js';
 import { seedDatabase } from './db/seed.js';
 
 let db = null;
-const DB_PATH = process.env.DB_PATH || './voicecart.db';
+let currentDbPath = null;
 
 /**
  * Initialize Database Connection, apply migrations, and seed demo tenant
  */
 export async function initDatabase() {
   const dbPath = process.env.DB_PATH || './voicecart.db';
-  if (db) return db;
+  if (db && currentDbPath === dbPath) return db;
+
+  if (db) {
+    await new Promise((res) => db.close(() => res()));
+    db = null;
+  }
+  currentDbPath = dbPath;
 
   return new Promise((resolve, reject) => {
     db = new sqlite3.Database(dbPath, async (err) => {
@@ -20,7 +26,6 @@ export async function initDatabase() {
       }
       console.log(`[DB] Connected to SQLite database at ${dbPath}`);
 
-      // Enable WAL mode & foreign keys for concurrency and integrity
       db.run('PRAGMA journal_mode = WAL;');
       db.run('PRAGMA foreign_keys = ON;');
 
@@ -196,8 +201,17 @@ export async function saveCallRecording({ call_id, call_sid, audio_path, duratio
   );
 }
 
+export async function closeDatabase() {
+  if (db) {
+    await new Promise((res) => db.close(() => res()));
+    db = null;
+    currentDbPath = null;
+  }
+}
+
 export default {
   initDatabase,
+  closeDatabase,
   dbRun,
   dbGet,
   dbAll,

@@ -59,7 +59,7 @@ test('Release Gate 2: Atomic Outbox Claiming & Stale Event Recovery', async () =
   assert.equal(completed.status, 'completed');
 });
 
-test('Release Gate 2: Single-Use 30s WebSocket Tickets', () => {
+test('Release Gate 2: Single-Use 30s WebSocket Tickets', async () => {
   const user = {
     userId: 'user_101',
     email: 'chef@annapoorna.com',
@@ -68,18 +68,18 @@ test('Release Gate 2: Single-Use 30s WebSocket Tickets', () => {
     restaurantId: 'r_coimbatore_01',
   };
 
-  const { ticket, expiresInSeconds } = createWsTicket(user);
+  const { ticket, expiresInSeconds } = await createWsTicket(user);
   assert.ok(ticket.startsWith('wst_'));
   assert.equal(expiresInSeconds, 30);
 
   // First consumption succeeds
-  const authContext = consumeWsTicket(ticket);
+  const authContext = await consumeWsTicket(ticket);
   assert.ok(authContext);
   assert.equal(authContext.email, 'chef@annapoorna.com');
   assert.equal(authContext.role, 'KITCHEN');
 
   // Second consumption fails (Single-use security guarantee)
-  const replayed = consumeWsTicket(ticket);
+  const replayed = await consumeWsTicket(ticket);
   assert.equal(replayed, null);
 });
 

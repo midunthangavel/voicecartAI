@@ -40,9 +40,9 @@ async function bootstrap() {
     console.log(`   - Twilio Telephony:   ws://${HOST}:${PORT}/media-stream`);
     console.log(`   - Dashboard Stream:   ws://${HOST}:${PORT}/dashboard-ws`);
     console.log(`   - Public Tunnel URL:  ${process.env.PUBLIC_URL || 'Not configured'}`);
-    console.log(`   - LLM Engine:         ${process.env.AI_LLM_PROVIDER || 'gemini'}`);
-    console.log(`   - STT Engine:         ${process.env.AI_STT_PROVIDER || 'mock'}`);
-    console.log(`   - TTS Engine:         ${process.env.AI_TTS_PROVIDER || 'mock'}`);
+    console.log(`   - LLM Engine:         ${process.env.AI_LLM_PROVIDER || 'ollama'}${process.env.AI_LLM_PROVIDER === 'ollama' ? ' (Llama 3.2 1B Local)' : ''}`);
+    console.log(`   - STT Engine:         ${process.env.AI_STT_PROVIDER || 'whisper'}${process.env.AI_STT_PROVIDER === 'whisper' ? ' (Whisper Tiny Local)' : ''}`);
+    console.log(`   - TTS Engine:         ${process.env.AI_TTS_PROVIDER || 'mock'} (On-Device Mobile Neural Voice)`);
     console.log('======================================================\n');
   });
 

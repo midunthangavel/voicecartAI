@@ -28,6 +28,7 @@ export class JobQueue extends EventEmitter {
     this.drainTimer = setInterval(() => {
       this._drain();
     }, 5000);
+    if (this.drainTimer.unref) this.drainTimer.unref();
   }
 
   /**

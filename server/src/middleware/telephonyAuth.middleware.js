@@ -78,9 +78,23 @@ export function exotelAuthMiddleware() {
   };
 }
 
+/**
+ * Express middleware to verify any supported telephony provider (Exotel or Twilio)
+ */
+export function telephonyWebhookAuthMiddleware() {
+  return (req, res, next) => {
+    if (verifyExotelSignature(req) || verifyTwilioSignature(req)) {
+      return next();
+    }
+    console.warn(`[Security] Rejected unauthenticated telephony webhook from ${req.ip} on ${req.originalUrl}`);
+    return res.status(403).json({ error: 'Forbidden: Invalid Telephony Provider Signature' });
+  };
+}
+
 export default {
   verifyTwilioSignature,
   verifyExotelSignature,
   twilioAuthMiddleware,
   exotelAuthMiddleware,
+  telephonyWebhookAuthMiddleware,
 };

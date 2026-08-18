@@ -10,6 +10,7 @@ const TEST_DB = resolve('./test_dialogue.db');
 test.before(async () => {
   if (existsSync(TEST_DB)) unlinkSync(TEST_DB);
   process.env.DB_PATH = TEST_DB;
+  process.env.AI_LLM_PROVIDER = 'rule_engine';
   await initDatabase();
 });
 

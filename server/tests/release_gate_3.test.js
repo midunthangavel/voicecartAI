@@ -22,8 +22,8 @@ test.after(async () => {
   try { if (existsSync(TEST_DB)) unlinkSync(TEST_DB); } catch {}
 });
 
-test('Release Gate 3: Signed Telephony Stream Tickets (Twilio/Exotel)', () => {
-  const streamTicket = createStreamTicket({
+test('Release Gate 3: Signed Telephony Stream Tickets (Twilio/Exotel)', async () => {
+  const streamTicket = await createStreamTicket({
     callSid: 'CA_test_call_123',
     callerPhone: '+919876543210',
     provider: 'twilio',
@@ -34,13 +34,13 @@ test('Release Gate 3: Signed Telephony Stream Tickets (Twilio/Exotel)', () => {
   assert.ok(streamTicket.startsWith('strm_'));
 
   // First consumption succeeds
-  const meta = consumeStreamTicket(streamTicket);
+  const meta = await consumeStreamTicket(streamTicket);
   assert.ok(meta);
   assert.equal(meta.callSid, 'CA_test_call_123');
   assert.equal(meta.provider, 'twilio');
 
   // Second consumption is rejected (single-use security guarantee)
-  const replayed = consumeStreamTicket(streamTicket);
+  const replayed = await consumeStreamTicket(streamTicket);
   assert.equal(replayed, null);
 });
 

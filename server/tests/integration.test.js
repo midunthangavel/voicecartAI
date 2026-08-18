@@ -48,7 +48,11 @@ test.after(async () => {
   if (server) {
     await new Promise((resolve) => server.close(resolve));
   }
-  try { if (existsSync(TEST_DB)) unlinkSync(TEST_DB); } catch {}
+  try {
+    if (existsSync(TEST_DB)) unlinkSync(TEST_DB);
+    if (existsSync(`${TEST_DB}-wal`)) unlinkSync(`${TEST_DB}-wal`);
+    if (existsSync(`${TEST_DB}-shm`)) unlinkSync(`${TEST_DB}-shm`);
+  } catch {}
 });
 
 test('Integration Test: GET /api/stats (Authenticated Dashboard Statistics)', async () => {
@@ -73,7 +77,7 @@ test('Integration Test: GET /api/stats without token returns 401', async () => {
 });
 
 test('Integration Test: GET /api/catalog (Public Menu Items)', async () => {
-  const res = await fetch(`${BASE_URL}/api/catalog`);
+  const res = await fetch(`${BASE_URL}/api/catalog?tenant_id=t_annapoorna&restaurant_id=r_coimbatore_01`);
   assert.equal(res.status, 200);
   const items = await res.json();
   

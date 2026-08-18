@@ -1,0 +1,5 @@
+{
+  "status": "SKIPPED",
+  "reason": "Docker daemon is not running. Strix requires Docker to launch isolated agent sandboxes.",
+  "findings": []
+}

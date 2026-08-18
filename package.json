@@ -8,7 +8,15 @@
     "dev:client": "npm --prefix client run dev",
     "dev": "node -e \"const { spawn } = require('child_process'); spawn('npm', ['--prefix', 'server', 'run', 'dev'], { stdio: 'inherit', shell: true }); spawn('npm', ['--prefix', 'client', 'run', 'dev'], { stdio: 'inherit', shell: true });\"",
     "start": "npm --prefix server start",
+    "mobile": "npm --prefix mobile start",
+    "mobile:tunnel": "npm --prefix mobile start -- --tunnel",
     "test": "npm --prefix server test",
-    "build": "npm --prefix client run build"
+    "build": "npm --prefix client run build",
+    "sec:audit": "node security-suite/runner.js --target all",
+    "sec:server": "node security-suite/runner.js --target server",
+    "sec:client": "node security-suite/runner.js --target client",
+    "sec:mobile": "node security-suite/runner.js --target mobile",
+    "sec:loop": "node security-suite/runner.js --target all --loop",
+    "sec:strix": "node security-suite/runner.js --strix"
   }
 }

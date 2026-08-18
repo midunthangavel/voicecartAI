@@ -15,6 +15,13 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 // ── Provider Configuration ──
 
 const PROVIDERS = {
+  ollama: {
+    name: 'Ollama (Local Llama 3.2 1B)',
+    baseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434/v1/chat/completions',
+    model: process.env.OLLAMA_MODEL || 'llama3.2:1b',
+    envKey: null,
+    format: 'openai',
+  },
   groq: {
     name: 'Groq',
     baseUrl: 'https://api.groq.com/openai/v1/chat/completions',
@@ -44,23 +51,28 @@ const PROVIDERS = {
 // ── Fallback Cascade Order ──
 
 function getFallbackChain() {
-  const primary = process.env.AI_LLM_PROVIDER || 'gemini';
-  const allProviders = ['groq', 'gemini', 'openrouter'];
+  const primary = process.env.AI_LLM_PROVIDER || 'ollama';
+  if (primary === 'rule_engine' || primary === 'mock' || primary === 'rules') {
+    return [];
+  }
+  const allProviders = ['ollama', 'groq', 'gemini', 'openrouter'];
   // Put primary first, then the rest in order
   const chain = [primary, ...allProviders.filter(p => p !== primary)];
-  // Filter to only providers with API keys configured
+  // Filter to available providers (ollama is local, others require API keys)
   return chain.filter(p => {
     const config = PROVIDERS[p];
-    return config && process.env[config.envKey];
+    if (!config) return false;
+    if (p === 'ollama') return true;
+    return Boolean(process.env[config.envKey]);
   });
 }
 
-// ── OpenAI-Compatible API Call (Groq, OpenRouter) ──
+// ── OpenAI-Compatible API Call (Ollama, Groq, OpenRouter) ──
 
 async function callOpenAiCompatible(provider, systemPrompt, messages) {
   const config = PROVIDERS[provider];
-  const apiKey = process.env[config.envKey];
-  if (!apiKey) throw new Error(`${config.name} API key not configured`);
+  const apiKey = config.envKey ? process.env[config.envKey] : 'ollama';
+  if (config.envKey && !apiKey) throw new Error(`${config.name} API key not configured`);
 
   const body = {
     model: config.model,
@@ -68,14 +80,14 @@ async function callOpenAiCompatible(provider, systemPrompt, messages) {
       { role: 'system', content: systemPrompt },
       ...messages,
     ],
-    temperature: 0.7,
+    temperature: 0.3,
     max_tokens: 1024,
     response_format: { type: 'json_object' },
   };
 
   const headers = {
     'Content-Type': 'application/json',
-    'Authorization': `Bearer ${apiKey}`,
+    ...(apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {}),
     ...(config.extraHeaders || {}),
   };
 
@@ -85,7 +97,7 @@ async function callOpenAiCompatible(provider, systemPrompt, messages) {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(15000), // 15s timeout
+    signal: AbortSignal.timeout(30000), // 30s timeout for local/cloud LLM inference
   });
 
   if (!response.ok) {

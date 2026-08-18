@@ -1,11 +1,14 @@
 import { readdirSync, readFileSync } from 'fs';
-import { resolve as pathResolve, join } from 'path';
+import { resolve as pathResolve, join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /**
  * Migration runner that reads .sql migration files and executes them idempotently
  */
 export async function runMigrations(db) {
-  const migrationsDir = pathResolve('src', 'db', 'migrations');
+  const migrationsDir = __dirname;
   console.log('[Migrations] Checking database schema migrations in:', migrationsDir);
 
   // 1. Ensure migrations ledger exists

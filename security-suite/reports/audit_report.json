@@ -1,0 +1,13 @@
+{
+  "timestamp": "2026-08-16T14:33:31.100Z",
+  "scanDurationSeconds": "2.22",
+  "target": "all",
+  "stats": {
+    "total": 0,
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0
+  },
+  "findings": []
+}

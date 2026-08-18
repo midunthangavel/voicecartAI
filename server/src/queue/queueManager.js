@@ -77,16 +77,28 @@ export function initQueueProcessors() {
 // Initialize processors immediately
 initQueueProcessors();
 
-export function enqueueNotificationJob(type, data, options = {}) {
-  return notificationQueue.add(type, data, options);
+export function enqueueNotificationJob(typeOrData, data = {}, options = {}) {
+  if (typeof typeOrData === 'string') {
+    return notificationQueue.add(typeOrData, data, options);
+  }
+  const jobType = (typeOrData && typeOrData.jobType) || 'SEND_NOTIFICATION';
+  return notificationQueue.add(jobType, typeOrData, data || options);
 }
 
-export function enqueueDispatchJob(type, data, options = {}) {
-  return dispatchQueue.add(type, data, options);
+export function enqueueDispatchJob(typeOrData, data = {}, options = {}) {
+  if (typeof typeOrData === 'string') {
+    return dispatchQueue.add(typeOrData, data, options);
+  }
+  const jobType = (typeOrData && typeOrData.jobType) || typeOrData.type || 'DISPATCH_ORDER';
+  return dispatchQueue.add(jobType, typeOrData, data || options);
 }
 
-export function enqueueRecordingJob(type, data, options = {}) {
-  return recordingQueue.add(type, data, options);
+export function enqueueRecordingJob(typeOrData, data = {}, options = {}) {
+  if (typeof typeOrData === 'string') {
+    return recordingQueue.add(typeOrData, data, options);
+  }
+  const jobType = (typeOrData && typeOrData.jobType) || typeOrData.type || 'PERSIST_CALL_AUDIO';
+  return recordingQueue.add(jobType, typeOrData, data || options);
 }
 
 export function getAllQueueStats() {

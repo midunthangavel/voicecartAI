@@ -61,7 +61,7 @@ test('Security: Tampered or Malformed JWT Token Rejection', async () => {
     /Authentication failed/
   );
 
-  const validToken = await generateToken({ id: '1', email: 'test@test.com', role: 'STAFF' });
+  const validToken = await generateToken({ id: '1', email: 'test@test.com', role: 'STAFF', tenant_id: 't_annapoorna', restaurant_id: 'r_coimbatore_01' });
   const tamperedToken = validToken.slice(0, -5) + 'xxxxx';
 
   await assert.rejects(

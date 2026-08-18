@@ -74,8 +74,9 @@ export async function matchCatalogItem(rawName, options = {}) {
  * Authoritatively calculates order subtotal, GST tax (5%), delivery fees, and total.
  */
 export function calculateOrderTotals(items = [], options = {}) {
-  const deliveryFee = options.delivery_fee !== undefined ? options.delivery_fee : 30; // ₹30 delivery fee
-  const discount = options.discount || 0;
+  const opts = (typeof options === 'object' && options !== null) ? options : {};
+  const deliveryFee = opts.delivery_fee !== undefined ? opts.delivery_fee : 30; // ₹30 delivery fee
+  const discount = opts.discount || 0;
 
   // Calculate in integer paise to avoid IEEE 754 precision drift
   let subtotalPaise = 0;

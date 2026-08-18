@@ -1,0 +1,25 @@
+{
+  "name": "voicecart-security-suite",
+  "version": "1.0.0",
+  "description": "Autonomous Pentesting, Strix Red-Team Orchestrator & Multi-Tier Security Auditor for VoiceCart AI",
+  "main": "runner.js",
+  "type": "module",
+  "scripts": {
+    "audit": "node runner.js --target all",
+    "audit:server": "node runner.js --target server",
+    "audit:client": "node runner.js --target client",
+    "audit:mobile": "node runner.js --target mobile",
+    "loop": "node runner.js --target all --loop",
+    "strix": "python analyzers/strix_orchestrator.py --target all"
+  },
+  "keywords": [
+    "security",
+    "pentest",
+    "strix",
+    "red-team",
+    "voicecart",
+    "fuzzer"
+  ],
+  "author": "VoiceCart AI Team",
+  "license": "MIT"
+}
