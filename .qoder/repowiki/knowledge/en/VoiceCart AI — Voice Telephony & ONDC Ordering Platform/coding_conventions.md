@@ -1,0 +1,3 @@
+- Each child module is launched independently via `npm --prefix <child>` from the root package scripts rather than through a custom process manager.
+- Environment-driven configuration is used across services (e.g., `NODE_ENV`, `PORT`, provider flags like `AI_LLM_PRIMARY_PROVIDER`, `REDIS_URL`) instead of hardcoded values.
+- Containerized deployments rely on health checks against HTTP endpoints (`/api/engine-status`) to gate service readiness.

@@ -1,0 +1,1 @@
+Run with `npm start` (or `npm run dev` using `node --watch`). Tests execute via `npm test` which runs `node --test --test-concurrency=1 tests/*.test.js` against isolated SQLite files generated per test run. Database schema evolves automatically at boot through numbered `.sql` migrations in `src/db/migrations/` tracked in `schema_migrations`.

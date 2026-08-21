@@ -1,0 +1,6 @@
+- Authentication state is persisted in `localStorage` under fixed keys (`voicecart_token`, `voicecart_refresh_token`, `voicecart_user`) and broadcast across the app via a custom `voicecart_auth_change` window event.
+- All HTTP requests go through `apiFetch`, which normalizes `/api/...` paths to `/api/v1/...`, injects Bearer tokens, and auto-retries once after refreshing an expired token on 401 responses.
+- Real-time features are encapsulated in custom hooks (e.g., `useDashboardWs`, `useKds`, `useMetrics`) that manage WebSocket lifecycle, reconnect backoff, and expose derived state to components.
+- Environment-aware base URLs are computed per file using hostname checks (`localhost` / `10.*` vs production `voicecartai.onrender.com`) rather than environment variables.
+- View routing is implemented as conditional rendering inside `App.jsx` keyed by an `activeView` string state, with a parallel `MobileCallView` triggered by pathname or explicit navigation.
+- Components consume shared live metrics via props (`events`, `stats`, `serverStatus`) passed down from `App.jsx` rather than fetching directly, keeping data flow unidirectional.

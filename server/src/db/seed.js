@@ -160,7 +160,7 @@ export async function seedDatabase(db) {
   ];
 
   for (const u of users) {
-    const hashed = hashPassword(u.pass);
+    const hashed = await hashPassword(u.pass);
     await new Promise((resolve, reject) => {
       db.run(
         `INSERT OR IGNORE INTO users (id, tenant_id, email, password_hash, name, role)

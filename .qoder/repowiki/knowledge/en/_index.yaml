@@ -1,0 +1,79 @@
+# 知识卡导出索引文件
+schema_version: 1
+locale: en-US
+branch: main
+nodes_managed: true
+exported_at: "2026-08-19T08:02:29Z"
+modules:
+    "":
+        dir_name: VoiceCart AI — Voice Telephony & ONDC Ordering Platform
+        title: VoiceCart AI — Voice Telephony & ONDC Ordering Platform
+        scope:
+            - .gitignore
+            - Dockerfile
+            - docker-compose.yml
+            - package.json
+            - vercel.json
+            - implementation_plan.md
+            - document_analysis_report.md
+            - local_stack_comparison.md
+            - note.txt
+            - note1.txt
+            - Phase2.pdf
+            - final_definitive_local_stack
+            - implementation_plan_phase2
+            - implementation_plan_to_local
+        source_files: []
+        children:
+            - client
+            - mobile
+            - security_suite
+            - server
+        depends_on: []
+        related_to: []
+    client:
+        dir_name: VoiceCart Operations Dashboard (React Client)
+        title: VoiceCart Operations Dashboard (React Client)
+        scope:
+            - client/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: security_suite
+            - path: server
+    mobile:
+        dir_name: VoiceCart Mobile App (Expo React Native)
+        title: VoiceCart Mobile App (Expo React Native)
+        scope:
+            - mobile/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: security_suite
+            - path: server
+    security_suite:
+        dir_name: VoiceCart AI Autonomous Security & Pentest Suite
+        title: VoiceCart AI Autonomous Security & Pentest Suite
+        scope:
+            - security-suite/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: client
+            - path: mobile
+            - path: server
+    server:
+        dir_name: VoiceCart AI Telephony Ordering Server
+        title: VoiceCart AI Telephony Ordering Server
+        scope:
+            - server/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: client
+            - path: mobile
+            - path: security_suite

@@ -1,0 +1,1 @@
+React 18 + Vite 8 with `@vitejs/plugin-react`; icon set via `lucide-react`; built for static hosting on Vercel (SPA rewrites) and development proxying to a Node backend on port 3001.

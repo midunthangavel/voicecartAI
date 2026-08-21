@@ -1,0 +1,21 @@
+schema_version: 1
+module_path: ""
+title: VoiceCart AI — Voice Telephony & ONDC Ordering Platform
+scope:
+    - .gitignore
+    - Dockerfile
+    - docker-compose.yml
+    - package.json
+    - vercel.json
+    - implementation_plan.md
+    - document_analysis_report.md
+    - local_stack_comparison.md
+    - note.txt
+    - note1.txt
+    - Phase2.pdf
+    - final_definitive_local_stack
+    - implementation_plan_phase2
+    - implementation_plan_to_local
+source_files: []
+depends_on: []
+related_to: []

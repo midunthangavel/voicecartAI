@@ -1,0 +1,1 @@
+Dev server runs on port 5173 and proxies API/WebSocket paths to `http://localhost:3001`; production deployment uses `vercel.json` rewrites so any route falls back to `index.html` for client-side routing.

@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { ShoppingBag, CreditCard, Truck, MessageSquare, RefreshCw, Pause, Users, Volume2, ChefHat, CheckCircle2, Clock } from 'lucide-react';
 import { useKds } from '../hooks/useKds.js';
+import { apiFetch } from '../services/apiClient';
 
 export default function OrderDispatch({ events = [] }) {
   const {
@@ -213,12 +214,13 @@ export default function OrderDispatch({ events = [] }) {
                           className="btn btn-sm"
                           style={{ background: 'var(--accent-emerald)', color: '#fff', padding: '2px 6px', fontSize: '0.65rem' }}
                           onClick={async () => {
-                            await fetch(`/api/orders/${order.id}/resolve-dispute`, {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ resolution: 'refund', notes: 'Refund approved by store manager' }),
-                            });
-                            refreshOrders();
+                            try {
+                              await apiFetch(`/api/orders/${order.id}/resolve-dispute`, {
+                                method: 'POST',
+                                body: JSON.stringify({ resolution: 'refund', notes: 'Refund approved by store manager' }),
+                              });
+                              refreshOrders();
+                            } catch {}
                           }}
                         >
                           Refund
@@ -227,12 +229,13 @@ export default function OrderDispatch({ events = [] }) {
                           className="btn btn-sm btn-ghost"
                           style={{ padding: '2px 6px', fontSize: '0.65rem', borderColor: 'var(--accent-rose)', color: 'var(--accent-rose)' }}
                           onClick={async () => {
-                            await fetch(`/api/orders/${order.id}/resolve-dispute`, {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ resolution: 'reject', notes: 'Dispute investigated and dismissed' }),
-                            });
-                            refreshOrders();
+                            try {
+                              await apiFetch(`/api/orders/${order.id}/resolve-dispute`, {
+                                method: 'POST',
+                                body: JSON.stringify({ resolution: 'reject', notes: 'Dispute investigated and dismissed' }),
+                              });
+                              refreshOrders();
+                            } catch {}
                           }}
                         >
                           Reject
@@ -265,12 +268,13 @@ export default function OrderDispatch({ events = [] }) {
                     onClick={async () => {
                       const reason = prompt('Enter reason for customer dispute:');
                       if (reason) {
-                        await fetch(`/api/orders/${order.id}/dispute`, {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ reason }),
-                        });
-                        refreshOrders();
+                        try {
+                          await apiFetch(`/api/orders/${order.id}/dispute`, {
+                            method: 'POST',
+                            body: JSON.stringify({ reason }),
+                          });
+                          refreshOrders();
+                        } catch {}
                       }
                     }}
                   >

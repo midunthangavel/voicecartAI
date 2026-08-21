@@ -40,12 +40,7 @@ export async function getCategories(req, res, next) {
 
 export async function addCatalogItem(req, res, next) {
   try {
-    const tenantId = req.auth?.tenantId;
-    const restaurantId = req.auth?.restaurantId;
-
-    if (!tenantId || !restaurantId) {
-      throw new AppError(401, 'AUTH_CONTEXT_MISSING', 'Authenticated restaurant manager context is required');
-    }
+    const { tenantId, restaurantId } = req.tenant;
 
     const {
       category_id,

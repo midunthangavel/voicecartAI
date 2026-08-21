@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { promisify } from 'util';
 import { SignJWT, jwtVerify } from 'jose';
 import { dbGet, dbRun } from '../db.js';
 import { logger } from '../utils/logger.js';
@@ -19,20 +20,23 @@ const JWT_ISSUER = 'voicecart-api';
 const JWT_AUDIENCE = 'voicecart-dashboard';
 
 const PBKDF2_ITERATIONS = 210000;
+const pbkdf2Async = promisify(crypto.pbkdf2);
 
 /**
- * Secure Password Hashing with unique random salts and 210,000 PBKDF2 iterations
+ * Secure Password Hashing with unique random salts and 210,000 PBKDF2 iterations.
+ * Non-blocking: offloads CPU-intensive hashing to libuv thread pool.
  */
-export function hashPassword(password, salt = null) {
+export async function hashPassword(password, salt = null) {
   const userSalt = salt || crypto.randomBytes(16).toString('hex');
-  const hash = crypto.pbkdf2Sync(password, userSalt, PBKDF2_ITERATIONS, 32, 'sha256').toString('hex');
-  return `${userSalt}:${hash}`;
+  const derivedKey = await pbkdf2Async(password, userSalt, PBKDF2_ITERATIONS, 32, 'sha256');
+  return `${userSalt}:${derivedKey.toString('hex')}`;
 }
 
 /**
- * Strict Password Verification — No legacy weak hashes permitted
+ * Strict Password Verification — Non-blocking, constant-time comparison.
+ * No legacy weak hashes permitted.
  */
-export function verifyPassword(password, storedHash) {
+export async function verifyPassword(password, storedHash) {
   if (!storedHash || !storedHash.includes(':')) {
     return false;
   }
@@ -40,7 +44,8 @@ export function verifyPassword(password, storedHash) {
   const [salt, expectedHash] = storedHash.split(':');
   if (!salt || !expectedHash) return false;
 
-  const actualHash = crypto.pbkdf2Sync(password, salt, PBKDF2_ITERATIONS, 32, 'sha256').toString('hex');
+  const derivedKey = await pbkdf2Async(password, salt, PBKDF2_ITERATIONS, 32, 'sha256');
+  const actualHash = derivedKey.toString('hex');
   return crypto.timingSafeEqual(Buffer.from(actualHash), Buffer.from(expectedHash));
 }
 
@@ -177,7 +182,7 @@ export async function authenticateUser(email, password) {
     throw new AppError(401, 'INVALID_CREDENTIALS', 'Invalid email or password');
   }
 
-  const isValid = verifyPassword(password, user.password_hash);
+  const isValid = await verifyPassword(password, user.password_hash);
   if (!isValid) {
     throw new AppError(401, 'INVALID_CREDENTIALS', 'Invalid email or password');
   }

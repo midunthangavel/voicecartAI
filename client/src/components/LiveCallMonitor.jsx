@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Phone, PhoneOff, Clock, Zap, User, Globe, RefreshCw, Volume2, Pause } from 'lucide-react';
+import { apiFetch } from '../services/apiClient';
 
 export default function LiveCallMonitor() {
   const [calls, setCalls] = useState([]);
@@ -19,22 +20,19 @@ export default function LiveCallMonitor() {
 
   async function fetchCalls() {
     try {
-      const res = await fetch('/api/calls');
-      if (res.ok) setCalls(await res.json());
+      setCalls(await apiFetch('/api/calls'));
     } catch {}
   }
 
   async function fetchSessions() {
     try {
-      const res = await fetch('/api/sessions');
-      if (res.ok) setSessions(await res.json());
+      setSessions(await apiFetch('/api/sessions'));
     } catch {}
   }
 
   async function fetchCallDetail(id) {
     try {
-      const res = await fetch(`/api/calls/${id}`);
-      if (res.ok) setSelectedCall(await res.json());
+      setSelectedCall(await apiFetch(`/api/calls/${id}`));
     } catch {}
   }
 

@@ -1,0 +1,11 @@
+schema_version: 1
+module_path: server
+title: VoiceCart AI Telephony Ordering Server
+scope:
+    - server/
+source_files: []
+depends_on: []
+related_to:
+    - path: client
+    - path: mobile
+    - path: security_suite

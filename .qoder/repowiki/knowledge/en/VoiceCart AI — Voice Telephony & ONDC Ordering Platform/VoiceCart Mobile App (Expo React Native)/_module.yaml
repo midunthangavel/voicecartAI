@@ -1,0 +1,10 @@
+schema_version: 1
+module_path: mobile
+title: VoiceCart Mobile App (Expo React Native)
+scope:
+    - mobile/
+source_files: []
+depends_on: []
+related_to:
+    - path: security_suite
+    - path: server

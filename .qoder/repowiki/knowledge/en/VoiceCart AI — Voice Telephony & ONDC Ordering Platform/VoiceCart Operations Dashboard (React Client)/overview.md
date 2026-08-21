@@ -1,0 +1,1 @@
+React/Vite single-page dashboard for monitoring AI voice ordering calls, dispatching orders, managing catalogs, and viewing analytics with real-time WebSocket updates.

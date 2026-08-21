@@ -1,0 +1,6 @@
+- HTTP routes are grouped under `src/routes/v1/index.js` with public endpoints rate-limited separately from protected endpoints gated by `authMiddleware` and `requireRole` RBAC guards.
+- All request payloads and queries are validated with Zod schemas defined in `src/schemas/*` and applied via the `validateBody` / `validateQuery` middleware before reaching controllers.
+- External integrations (LLM, STT, TTS, telephony, payments, WhatsApp, ONDC) are wrapped as injectable service modules under `src/services/*` rather than called directly from controllers.
+- Long-running or side-effecting work is offloaded to the database-backed `JobQueue` class with explicit job-type registration, exponential backoff retries, and DLQ routing instead of ad-hoc timers.
+- Database schema changes are expressed as ordered `.sql` migration files in `src/db/migrations/` and applied idempotently at startup via `runMigrations`, with legacy column additions guarded by `safeAddColumn`.
+- WebSocket upgrade paths are centrally authorized in `wsServer.js` per pathname using single-use tickets or bearer tokens, then delegated to path-specific handlers that share a cluster-wide `sessions` Map.

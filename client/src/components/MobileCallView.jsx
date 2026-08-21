@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Phone, PhoneOff, Mic, MicOff, Sparkles, CheckCircle2, ShoppingBag, ArrowLeft } from 'lucide-react';
+import { apiFetch } from '../services/apiClient';
 
 export default function MobileCallView() {
   const [callState, setCallState] = useState('idle'); // idle, calling, connected, ended
@@ -50,7 +51,7 @@ export default function MobileCallView() {
       const apiHost = isLocal ? `http://${window.location.host}` : 'https://voicecartai.onrender.com';
 
       // Wake up Render server if sleeping
-      fetch(`${apiHost}/api/stats`).catch(() => {});
+      apiFetch(`${apiHost}/api/stats`).catch(() => {});
 
       const ws = new WebSocket(`${protocol}//${backendHost}/web-stream`);
 

@@ -1,0 +1,1 @@
+Expo SDK ~54 with React Native 0.81 / React 19; audio capture and playback via `expo-av`; text-to-speech via `expo-speech`; file system access via `expo-file-system`; runs on Android, iOS, and Web through Expo's multi-platform runtime.

@@ -1,0 +1,1 @@
+Root workspace orchestrating the VoiceCart AI platform: a Node.js telephony server, React dashboard, Expo mobile app, and an autonomous security/pentest suite, all wired via shared npm scripts and Docker Compose.

@@ -1,0 +1,1 @@
+Node.js 20 + Express/WS server, React/Vite client, Expo React Native mobile, SQLite persistence, Redis job queue, Docker/Docker Compose for containerized orchestration, Vercel for frontend hosting, and a mixed Node.js/Python security suite.

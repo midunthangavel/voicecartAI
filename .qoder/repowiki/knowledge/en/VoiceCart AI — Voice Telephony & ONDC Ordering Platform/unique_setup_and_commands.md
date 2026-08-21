@@ -1,0 +1,1 @@
+`npm run dev` concurrently starts both the server and client; `npm run mobile` launches the Expo app; `npm run test` runs server tests; `npm run build` produces the client dist served by the server; `npm run sec:*` targets the security suite against specific or all children.

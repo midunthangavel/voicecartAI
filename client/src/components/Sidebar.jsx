@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Mic, MonitorSpeaker, ShoppingBag, BookOpen, BarChart3, ShieldCheck, Zap, Sun, Moon, Cpu, Radio, Volume2 } from 'lucide-react';
+import { apiFetch } from '../services/apiClient';
 
 const navItems = [
   { id: 'simulator', label: 'Voice Simulator', icon: Mic },
@@ -19,10 +20,7 @@ export default function Sidebar({ activeView, onNavigate, activeCalls, serverSta
   useEffect(() => {
     async function fetchEngineStatus() {
       try {
-        const res = await fetch(`${apiBase}/api/engine-status`);
-        if (res.ok) {
-          setEngineStatus(await res.json());
-        }
+        setEngineStatus(await apiFetch(`${apiBase}/api/engine-status`));
       } catch {}
     }
     fetchEngineStatus();

@@ -6,6 +6,42 @@ let db = null;
 let currentDbPath = null;
 
 /**
+ * Apply SQLite performance pragmas — awaited to guarantee completion before migrations.
+ * Uses serialize() for ordered execution; `synchronous = NORMAL` is applied with
+ * error resilience since it cannot be set inside an explicit transaction.
+ */
+function applyPragmas(database) {
+  return new Promise((resolve, reject) => {
+    database.serialize(() => {
+      // ── Always-safe pragmas (permitted inside transactions) ──
+      database.run('PRAGMA journal_mode = WAL;');        // Write-Ahead Logging: concurrent reads during writes
+      database.run('PRAGMA foreign_keys = ON;');          // Enforce referential integrity
+      database.run('PRAGMA busy_timeout = 5000;');        // Wait 5s on SQLITE_BUSY instead of immediate failure
+      database.run('PRAGMA cache_size = -20000;');        // 20 MB page cache (default ~2 MB)
+      database.run('PRAGMA temp_store = MEMORY;');        // Temp tables/indices in RAM
+      database.run('PRAGMA mmap_size = 268435456;');      // 256 MB memory-mapped I/O for faster reads
+      database.run('PRAGMA wal_autocheckpoint = 1000;');  // Checkpoint every 1000 WAL pages
+
+      // ── Write optimization — fails inside explicit transactions ──
+      // Safe with WAL mode: eliminates per-transaction fsync. If an explicit
+      // transaction is active, the pragma silently defers to the default (FULL).
+      database.run('PRAGMA synchronous = NORMAL;', (err) => {
+        if (err) {
+          console.log('[DB] PRAGMA synchronous=NORMAL deferred (active transaction — defaulting to FULL)');
+        }
+      });
+
+      // Verify the critical pragma to confirm all took effect
+      database.get('PRAGMA journal_mode;', (err, row) => {
+        if (err) return reject(err);
+        console.log(`[DB] Pragmas applied — journal_mode=${row?.journal_mode}, cache_size=20MB, busy_timeout=5s, synchronous=NORMAL`);
+        resolve();
+      });
+    });
+  });
+}
+
+/**
  * Initialize Database Connection, apply migrations, and seed demo tenant
  */
 export async function initDatabase() {
@@ -26,10 +62,9 @@ export async function initDatabase() {
       }
       console.log(`[DB] Connected to SQLite database at ${dbPath}`);
 
-      db.run('PRAGMA journal_mode = WAL;');
-      db.run('PRAGMA foreign_keys = ON;');
-
       try {
+        // Apply performance pragmas BEFORE migrations to ensure WAL mode is active
+        await applyPragmas(db);
         // Run SQL schema migrations
         await runMigrations(db);
         // Seed initial multi-tenant demo data

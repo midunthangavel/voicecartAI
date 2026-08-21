@@ -17,18 +17,18 @@ test.after(async () => {
   try { if (existsSync(TEST_DB)) unlinkSync(TEST_DB); } catch {}
 });
 
-test('Security: Individual Salt Password Hashing & Verification', () => {
+test('Security: Individual Salt Password Hashing & Verification', async () => {
   const password = 'SuperSecretPassword@2026';
-  const hashed1 = hashPassword(password);
-  const hashed2 = hashPassword(password);
+  const hashed1 = await hashPassword(password);
+  const hashed2 = await hashPassword(password);
 
   // Individual salts ensure hashes for same password are completely different
   assert.notEqual(hashed1, hashed2);
   assert.ok(hashed1.includes(':'));
 
-  assert.equal(verifyPassword(password, hashed1), true);
-  assert.equal(verifyPassword(password, hashed2), true);
-  assert.equal(verifyPassword('WrongPassword', hashed1), false);
+  assert.equal(await verifyPassword(password, hashed1), true);
+  assert.equal(await verifyPassword(password, hashed2), true);
+  assert.equal(await verifyPassword('WrongPassword', hashed1), false);
 });
 
 test('Security: Jose Cryptographic JWT Issuance & Verification', async () => {

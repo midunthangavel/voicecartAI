@@ -1,0 +1,1 @@
+An Expo-based React Native mobile app that connects to a VoiceCart AI backend via WebSocket to record voice, stream audio, display live transcripts, and manage voice-driven restaurant ordering.

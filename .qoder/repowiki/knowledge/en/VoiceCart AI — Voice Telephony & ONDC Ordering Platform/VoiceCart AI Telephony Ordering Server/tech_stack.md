@@ -1,0 +1,1 @@
+Express 4 + ws for HTTP/WebSocket; SQLite3 as primary datastore with SQL migration files; ioredis for distributed sessions/locks; jose for JWT; zod v4 for request validation; twilio/exotel for telephony streams; @google/generative-ai and @xenova/transformers for local LLM/STT; dotenv for env config.

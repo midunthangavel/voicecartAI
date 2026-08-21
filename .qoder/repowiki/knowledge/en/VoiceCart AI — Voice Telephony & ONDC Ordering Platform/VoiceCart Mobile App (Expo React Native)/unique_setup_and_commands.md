@@ -1,0 +1,1 @@
+Run with Expo CLI: `npm start` (interactive launcher), `npm run android`, `npm run ios`, or `npm run web`. The default WebSocket target is `ws://192.168.0.101:3001/web-stream` unless overridden by the `EXPO_PUBLIC_WS_URL` environment variable; production falls back to `wss://voicecartai.onrender.com/web-stream`.

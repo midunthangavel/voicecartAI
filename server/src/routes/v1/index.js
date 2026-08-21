@@ -8,6 +8,7 @@ import { authRouter } from '../auth.routes.js';
 import { metricsRouter } from '../metrics.routes.js';
 import { authMiddleware } from '../../middleware/auth.middleware.js';
 import { requireRole, ROLES } from '../../middleware/rbac.middleware.js';
+import { requireTenantContext } from '../../middleware/tenantContext.middleware.js';
 import { validateBody, validateQuery } from '../../middleware/validation.middleware.js';
 import { updateOrderStatusSchema, flagDisputeSchema, resolveDisputeSchema } from '../../schemas/order.schema.js';
 import { addCatalogItemSchema } from '../../schemas/catalog.schema.js';
@@ -36,6 +37,7 @@ v1Router.get('/merchants', publicApiLimiter, getMerchants);
 const protectedApi = Router();
 protectedApi.use(dashboardApiLimiter);
 protectedApi.use(authMiddleware({ required: true }));
+protectedApi.use(requireTenantContext());
 
 // Metrics, Telemetry & SLOs
 protectedApi.use('/metrics', requireRole(ROLES.RESTAURANT_MANAGER, ROLES.ADMIN), metricsRouter);
@@ -59,8 +61,7 @@ import { listActiveSessions } from '../../infra/sessionStore.js';
 
 protectedApi.get('/sessions', requireRole(ROLES.STAFF, ROLES.RESTAURANT_MANAGER, ROLES.ADMIN), async (req, res, next) => {
   try {
-    const reqTenantId = req.auth?.tenantId;
-    const reqRestaurantId = req.auth?.restaurantId;
+    const { tenantId: reqTenantId, restaurantId: reqRestaurantId } = req.tenant;
     const activeMap = new Map();
 
     // 1. Get cluster-wide active sessions from distributed Redis store
@@ -79,8 +80,8 @@ protectedApi.get('/sessions', requireRole(ROLES.STAFF, ROLES.RESTAURANT_MANAGER,
 
     // 2. Augment with local real-time audio sessions
     for (const [id, session] of sessions) {
-      if (session.tenantId && reqTenantId && session.tenantId !== reqTenantId) continue;
-      if (req.auth?.role !== 'ADMIN' && session.restaurantId && reqRestaurantId && session.restaurantId !== reqRestaurantId) continue;
+      if (session.tenantId && session.tenantId !== reqTenantId) continue;
+      if (req.auth?.role !== 'ADMIN' && session.restaurantId && session.restaurantId !== reqRestaurantId) continue;
 
       activeMap.set(id, {
         id,

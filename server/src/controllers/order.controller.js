@@ -5,23 +5,12 @@ import { AppError } from '../utils/AppError.js';
 
 /**
  * Controller for Orders Management
- * Scoped strictly by server-side authenticated identity (req.auth).
+ * Scoped strictly by server-side authenticated identity (req.tenant).
  */
-
-function getAuthContext(req) {
-  const tenantId = req.auth?.tenantId;
-  const restaurantId = req.auth?.restaurantId;
-
-  if (!tenantId || !restaurantId) {
-    throw new AppError(401, 'AUTH_CONTEXT_MISSING', 'Authenticated tenant and restaurant context is required');
-  }
-
-  return { tenantId, restaurantId };
-}
 
 export async function getOrders(req, res, next) {
   try {
-    const { tenantId, restaurantId } = getAuthContext(req);
+    const { tenantId, restaurantId } = req.tenant;
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 100);
 
     const orders = await getRecentOrders({ tenantId, restaurantId, limit });
@@ -33,7 +22,7 @@ export async function getOrders(req, res, next) {
 
 export async function getOrderById(req, res, next) {
   try {
-    const { tenantId, restaurantId } = getAuthContext(req);
+    const { tenantId, restaurantId } = req.tenant;
 
     const order = await getOrderWithItems(req.params.id, { tenantId, restaurantId });
     if (!order) {
@@ -48,7 +37,7 @@ export async function getOrderById(req, res, next) {
 export async function updateOrderStatus(req, res, next) {
   try {
     const { status, expectedVersion } = req.body;
-    const { tenantId, restaurantId } = getAuthContext(req);
+    const { tenantId, restaurantId } = req.tenant;
 
     const actor = {
       type: req.auth?.role?.toLowerCase() || 'staff',
@@ -65,7 +54,7 @@ export async function updateOrderStatus(req, res, next) {
 export async function flagOrderDispute(req, res, next) {
   try {
     const { reason, notes } = req.body;
-    const { tenantId, restaurantId } = getAuthContext(req);
+    const { tenantId, restaurantId } = req.tenant;
 
     const result = await transaction(async () => {
       const resDb = await dbRun(
@@ -102,7 +91,7 @@ export async function flagOrderDispute(req, res, next) {
 export async function resolveOrderDispute(req, res, next) {
   try {
     const { resolutionNotes, action } = req.body;
-    const { tenantId, restaurantId } = getAuthContext(req);
+    const { tenantId, restaurantId } = req.tenant;
 
     await transaction(async () => {
       const resDb = await dbRun(

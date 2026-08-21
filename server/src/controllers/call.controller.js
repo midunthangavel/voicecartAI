@@ -5,38 +5,34 @@ import { AppError } from '../utils/AppError.js';
 
 /**
  * Controller for Call Statistics and Session Inspection
- * Scoped strictly by server-side authenticated identity (req.auth) — Fail closed.
+ * Scoped strictly by server-side authenticated identity (req.tenant) — Fail closed.
  */
-
-function enforceAuthContext(req) {
-  const tenantId = req.auth?.tenantId;
-  const restaurantId = req.auth?.restaurantId;
-
-  if (!tenantId || !restaurantId) {
-    throw new AppError(401, 'AUTH_CONTEXT_MISSING', 'Authenticated tenant and restaurant context is required');
-  }
-
-  return { tenantId, restaurantId };
-}
 
 export async function getStats(req, res, next) {
   try {
-    const { tenantId, restaurantId } = enforceAuthContext(req);
+    const { tenantId, restaurantId } = req.tenant;
 
-    const totalCalls = await dbGet('SELECT COUNT(*) as count FROM calls WHERE tenant_id = ? AND restaurant_id = ?', [tenantId, restaurantId]);
-    const activeCalls = await dbGet("SELECT COUNT(*) as count FROM calls WHERE tenant_id = ? AND restaurant_id = ? AND status = 'active'", [tenantId, restaurantId]);
-    const totalOrders = await dbGet('SELECT COUNT(*) as count FROM orders WHERE tenant_id = ? AND restaurant_id = ?', [tenantId, restaurantId]);
-    const confirmedOrders = await dbGet("SELECT COUNT(*) as count FROM orders WHERE tenant_id = ? AND restaurant_id = ? AND status = 'confirmed'", [tenantId, restaurantId]);
-    const revenue = await dbGet("SELECT COALESCE(SUM(total_amount), 0) as total FROM orders WHERE tenant_id = ? AND restaurant_id = ? AND status = 'confirmed'", [tenantId, restaurantId]);
-    const avgLatency = await dbGet('SELECT COALESCE(AVG(latency_avg_ms), 0) as avg FROM calls WHERE tenant_id = ? AND restaurant_id = ? AND latency_avg_ms > 0', [tenantId, restaurantId]);
+    // Single consolidated query: replaces 6 sequential round-trips with 1.
+    // SQLite evaluates boolean expressions as 1/0, so SUM(CASE WHEN...) counts matching rows.
+    const stats = await dbGet(
+      `SELECT
+         (SELECT COUNT(*) FROM calls WHERE tenant_id = ? AND restaurant_id = ?) AS total_calls,
+         (SELECT COUNT(*) FROM calls WHERE tenant_id = ? AND restaurant_id = ? AND status = 'active') AS active_calls,
+         (SELECT COUNT(*) FROM orders WHERE tenant_id = ? AND restaurant_id = ?) AS total_orders,
+         (SELECT COUNT(*) FROM orders WHERE tenant_id = ? AND restaurant_id = ? AND status = 'confirmed') AS confirmed_orders,
+         (SELECT COALESCE(SUM(total_amount), 0) FROM orders WHERE tenant_id = ? AND restaurant_id = ? AND status = 'confirmed') AS revenue,
+         (SELECT COALESCE(AVG(latency_avg_ms), 0) FROM calls WHERE tenant_id = ? AND restaurant_id = ? AND latency_avg_ms > 0) AS avg_latency`,
+      [tenantId, restaurantId, tenantId, restaurantId, tenantId, restaurantId,
+       tenantId, restaurantId, tenantId, restaurantId, tenantId, restaurantId]
+    );
 
     res.json({
-      total_calls: totalCalls?.count || 0,
-      active_calls: activeCalls?.count || 0,
-      total_orders: totalOrders?.count || 0,
-      confirmed_orders: confirmedOrders?.count || 0,
-      revenue: revenue?.total || 0,
-      avg_latency_ms: Math.round(avgLatency?.avg || 0),
+      total_calls: stats?.total_calls || 0,
+      active_calls: stats?.active_calls || 0,
+      total_orders: stats?.total_orders || 0,
+      confirmed_orders: stats?.confirmed_orders || 0,
+      revenue: stats?.revenue || 0,
+      avg_latency_ms: Math.round(stats?.avg_latency || 0),
     });
   } catch (err) {
     next(err);
@@ -45,7 +41,7 @@ export async function getStats(req, res, next) {
 
 export async function getRecentCalls(req, res, next) {
   try {
-    const { tenantId, restaurantId } = enforceAuthContext(req);
+    const { tenantId, restaurantId } = req.tenant;
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 100);
 
     const calls = await dbAll(
@@ -64,7 +60,7 @@ export async function getRecentCalls(req, res, next) {
 
 export async function getCallById(req, res, next) {
   try {
-    const { tenantId, restaurantId } = enforceAuthContext(req);
+    const { tenantId, restaurantId } = req.tenant;
 
     const call = await dbGet(
       'SELECT * FROM calls WHERE id = ? AND tenant_id = ? AND restaurant_id = ?',
@@ -90,7 +86,7 @@ export async function getCallById(req, res, next) {
 
 export async function getCallAudio(req, res, next) {
   try {
-    const { tenantId, restaurantId } = enforceAuthContext(req);
+    const { tenantId, restaurantId } = req.tenant;
 
     const call = await dbGet(
       'SELECT * FROM calls WHERE id = ? AND tenant_id = ? AND restaurant_id = ?',

@@ -1,0 +1,5 @@
+- Global session state and actions are centralized in `VoiceSessionContext` and consumed by components exclusively through the `useVoiceSession()` custom hook.
+- The WebSocket client is exposed as a singleton instance (`socketService`) of `VoiceSocketService` using an event-emitter pattern (`on`/`off`/`emit`) rather than callbacks passed down from callers.
+- Transcript entries are appended as immutable arrays using functional `setTranscript(prev => [...prev, newItem])` with stable `id` prefixes (`user_`, `ai_`, `sys_`, `dtmf_`, `user_audio_`) based on message origin.
+- Component props follow a consistent naming scheme where modal visibility uses paired `isOpen` boolean + `setIsXxxOpen` setter, and action handlers use `onXxx` prefix (e.g., `onStartCall`, `onClose`, `onSendDigit`).
+- Server endpoints and URLs are defined as module-level constants at the top of the context file and injected into the provider value so components never hardcode connection strings.
