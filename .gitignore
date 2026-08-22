@@ -16,6 +16,10 @@ node_modules/
 *.sqlite
 *.sqlite3
 
+# Test artifacts (auto-generated during test runs)
+test_*.db*
+coverage/
+
 # Media and uploaded/recorded files
 recordings/
 server/recordings/

@@ -183,5 +183,15 @@ export async function runMigrations(db) {
   await safeCreateIndex('idx_calls_restaurant', 'CREATE INDEX IF NOT EXISTS idx_calls_restaurant ON calls(restaurant_id)');
   await safeCreateIndex('idx_order_items_order', 'CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id)');
 
+  // Production Hardening indexes (Phase 2.1)
+  await safeCreateIndex('idx_orders_tenant_created', 'CREATE INDEX IF NOT EXISTS idx_orders_tenant_restaurant_created_v2 ON orders(tenant_id, restaurant_id, created_at DESC)');
+  await safeCreateIndex('idx_calls_tenant_started', 'CREATE INDEX IF NOT EXISTS idx_calls_tenant_restaurant_started_v2 ON calls(tenant_id, restaurant_id, started_at DESC)');
+  await safeCreateIndex('idx_call_logs_call', 'CREATE INDEX IF NOT EXISTS idx_call_logs_call_timestamp ON call_logs(call_id, timestamp)');
+  await safeCreateIndex('idx_outbox_drain', 'CREATE INDEX IF NOT EXISTS idx_outbox_pending_drain ON outbox_events(status, scheduled_at, id)');
+  await safeCreateIndex('idx_jobs_drain', 'CREATE INDEX IF NOT EXISTS idx_jobs_pending_drain ON durable_job_queue(queue_name, status, scheduled_at, id)');
+  await safeCreateIndex('idx_audit_chain', 'CREATE INDEX IF NOT EXISTS idx_audit_restaurant_chain ON audit_logs(restaurant_id, id DESC)');
+  await safeCreateIndex('idx_webhooks_event', 'CREATE INDEX IF NOT EXISTS idx_webhooks_provider_event ON processed_webhooks(provider, event_id)');
+  await safeCreateIndex('idx_webhooks_at', 'CREATE INDEX IF NOT EXISTS idx_webhooks_processed_at ON processed_webhooks(processed_at)');
+
   console.log('[Migrations] All schema migrations and performance indexes are up to date.');
 }

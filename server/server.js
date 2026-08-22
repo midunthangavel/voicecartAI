@@ -1,6 +1,6 @@
 /**
  * VoiceCart AI — Composition Root
- * 
+ *
  * As specified in Phase2.pdf (Step 2, Pages 7-8):
  * server.js is a minimal composition root that boots infrastructure,
  * creates the application, mounts WebSocket streams, and binds to the network.
@@ -9,8 +9,9 @@
 import 'dotenv/config';
 import { createServer } from 'http';
 import { createApp } from './src/app.js';
-import { initDatabase } from './src/db.js';
+import { initDatabase, closeDatabase } from './src/db.js';
 import { createWebSocketCoordinator } from './src/websocket/wsServer.js';
+import { logger } from './src/utils/logger.js';
 
 const PORT = process.env.PORT || 3001;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -30,7 +31,7 @@ async function bootstrap() {
   const httpServer = createServer(app);
 
   // 4. Mount WebSocket Coordinator (/media-stream, /web-stream, /dashboard-ws)
-  createWebSocketCoordinator(httpServer);
+  const wsCoordinator = createWebSocketCoordinator(httpServer);
 
   // 5. Start listening
   httpServer.listen(PORT, HOST, () => {
@@ -46,17 +47,70 @@ async function bootstrap() {
     console.log('======================================================\n');
   });
 
-  // Graceful shutdown handling
-  const shutdown = () => {
-    console.log('\n[Server] Gracefully shutting down...');
+  // ── Coordinated Graceful Shutdown ──
+  // Sequence: stop accepting → drain connections → close WebSockets → flush DB → exit
+
+  let isShuttingDown = false;
+
+  const shutdown = async (signal) => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+
+    console.log(`\n[Server] Received ${signal}. Starting graceful shutdown...`);
+
+    // 1. Stop accepting new connections
     httpServer.close(() => {
-      console.log('[Server] Closed all connections. Exiting.');
-      process.exit(0);
+      console.log('[Server] HTTP server closed — no new connections accepted.');
     });
+
+    // 2. Close all WebSocket connections gracefully
+    if (wsCoordinator && typeof wsCoordinator.close === 'function') {
+      try {
+        wsCoordinator.close();
+        console.log('[Server] WebSocket connections closed.');
+      } catch (err) {
+        console.warn('[Server] WebSocket close error:', err.message);
+      }
+    }
+
+    // 3. Wait briefly for in-flight requests to complete
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    // 4. Close database connections
+    try {
+      await closeDatabase();
+      console.log('[Server] Database connections closed.');
+    } catch (err) {
+      console.warn('[Server] Database close error:', err.message);
+    }
+
+    // 5. Close Redis connections
+    try {
+      const { getRedisClient } = await import('./src/infra/redisClient.js');
+      const redis = getRedisClient();
+      if (redis && typeof redis.quit === 'function') {
+        await redis.quit();
+        console.log('[Server] Redis connection closed.');
+      }
+    } catch (err) {
+      // Redis may not be available — not critical
+    }
+
+    console.log('[Server] Graceful shutdown complete. Exiting.');
+    process.exit(0);
   };
 
-  process.on('SIGTERM', shutdown);
-  process.on('SIGINT', shutdown);
+  // Force exit after 10s if graceful shutdown stalls
+  const forceExit = (signal) => {
+    shutdown(signal);
+    setTimeout(() => {
+      console.error('[Server] Forced exit — shutdown did not complete within 10 seconds.');
+      process.exit(1);
+    }, 10000).unref();
+  };
+
+  process.on('SIGTERM', () => forceExit('SIGTERM'));
+  process.on('SIGINT', () => forceExit('SIGINT'));
 }
 
 bootstrap().catch((err) => {

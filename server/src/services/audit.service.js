@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { dbRun, dbAll, dbGet } from '../db.js';
+import { dbRun, dbAll, dbGet, transaction } from '../db.js';
 import { logger } from '../utils/logger.js';
 
 const GENESIS_HASH = 'GENESIS_BLOCK_VOICECART_AUDIT_2026';
@@ -11,9 +11,13 @@ function computeAuditHash(previousHash, tenantId, restaurantId, action, resource
 
 /**
  * State Transition Audit Trail Service with Cryptographic Merkle Hash Chain
- * 
+ *
  * Provides an immutable, tamper-evident compliance log for order state changes,
  * pricing updates, and automated actions.
+ *
+ * CONCURRENCY FIX: The SELECT previous_hash + INSERT new_block is now wrapped
+ * in a transaction to prevent race conditions where two concurrent inserts
+ * could read the same previous hash, creating a fork in the chain.
  */
 
 export async function recordAuditLog({
@@ -36,40 +40,48 @@ export async function recordAuditLog({
     const beforeStateStr = before_state ? JSON.stringify(before_state) : null;
     const metadataStr = JSON.stringify(metadata || {});
 
-    // 1. Fetch previous block hash for this restaurant
-    const lastBlock = await dbGet(
-      'SELECT hash FROM audit_logs WHERE restaurant_id = ? ORDER BY id DESC LIMIT 1',
-      [restaurant_id]
-    );
+    // Atomic transaction: SELECT previous hash → compute new hash → INSERT
+    // This prevents concurrent inserts from forking the hash chain.
+    const blockId = await transaction(async () => {
+      // 1. Fetch previous block hash and sequence number for this restaurant
+      const lastBlock = await dbGet(
+        'SELECT hash, sequence_number FROM audit_logs WHERE restaurant_id = ? ORDER BY id DESC LIMIT 1',
+        [restaurant_id]
+      );
 
-    const previousHash = lastBlock?.hash || GENESIS_HASH;
-    const hash = computeAuditHash(previousHash, tenant_id, restaurant_id, action, resource_type, resource_id, afterStateStr);
+      const previousHash = lastBlock?.hash || GENESIS_HASH;
+      const nextSequence = (lastBlock?.sequence_number || 0) + 1;
+      const hash = computeAuditHash(previousHash, tenant_id, restaurant_id, action, resource_type, resource_id, afterStateStr);
 
-    // 2. Insert cryptographically linked audit block
-    const res = await dbRun(
-      `INSERT INTO audit_logs (
-         tenant_id, restaurant_id, actor_type, actor_id, action,
-         resource_type, resource_id, before_state, after_state, metadata,
-         previous_hash, hash
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        tenant_id,
-        restaurant_id,
-        actor_type,
-        actor_id,
-        action,
-        resource_type,
-        String(resource_id),
-        beforeStateStr,
-        afterStateStr,
-        metadataStr,
-        previousHash,
-        hash,
-      ]
-    );
+      // 2. Insert cryptographically linked audit block with sequence number
+      const res = await dbRun(
+        `INSERT INTO audit_logs (
+           tenant_id, restaurant_id, actor_type, actor_id, action,
+           resource_type, resource_id, before_state, after_state, metadata,
+           previous_hash, hash, sequence_number
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          tenant_id,
+          restaurant_id,
+          actor_type,
+          actor_id,
+          action,
+          resource_type,
+          String(resource_id),
+          beforeStateStr,
+          afterStateStr,
+          metadataStr,
+          previousHash,
+          hash,
+          nextSequence,
+        ]
+      );
 
-    logger.info(`[Audit] ${action} on ${resource_type} #${resource_id} (Block #${res.lastID}, Hash: ${hash.substring(0, 10)}...)`);
-    return res.lastID;
+      return res.lastID;
+    });
+
+    logger.info(`[Audit] ${action} on ${resource_type} #${resource_id} (Block #${blockId})`);
+    return blockId;
   } catch (err) {
     logger.error('[Audit] Failed to record audit log:', err);
     return null;

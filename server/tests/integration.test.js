@@ -87,41 +87,37 @@ test('Integration Test: GET /api/catalog (Public Menu Items)', async () => {
   assert.ok('price' in items[0]);
 });
 
-test('Integration Test: POST /voice (Twilio Voice Webhook)', async () => {
+test('Integration Test: POST /voice requires telephony signature (returns 403)', async () => {
   const res = await fetch(`${BASE_URL}/voice`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: 'CallSid=CAtest123&From=%2B919876543210',
   });
   
-  assert.equal(res.status, 200);
-  const text = await res.text();
-  assert.ok(text.includes('<?xml version="1.0" encoding="UTF-8"?>'));
-  assert.ok(text.includes('/media-stream'));
+  // Telephony endpoints now require valid provider signatures (Phase 1.2)
+  assert.equal(res.status, 403);
 });
 
-test('Integration Test: POST /api/missed-call (Missed Call Webhook)', async () => {
+test('Integration Test: POST /api/missed-call requires telephony signature (returns 403)', async () => {
   const res = await fetch(`${BASE_URL}/api/missed-call`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ From: '+919876543210' }),
   });
   
-  assert.equal(res.status, 200);
-  const data = await res.json();
-  assert.ok('success' in data);
+  // Missed-call endpoints now require valid provider signatures (Phase 1.2)
+  assert.equal(res.status, 403);
 });
 
-test('Integration Test: POST /api/telephony/dtmf (IVR Digit Handler)', async () => {
+test('Integration Test: POST /api/telephony/dtmf requires telephony signature (returns 403)', async () => {
   const res = await fetch(`${BASE_URL}/api/telephony/dtmf`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: 'Digits=1&Caller=%2B919876543210',
   });
   
-  assert.equal(res.status, 200);
-  const xml = await res.text();
-  assert.ok(xml.includes('Repeating your last order'));
+  // DTMF endpoints now require valid provider signatures (Phase 1.2)
+  assert.equal(res.status, 403);
 });
 
 test('Integration Test: GET /pin/:orderId (Mobile Map Pin Drop Page)', async () => {
@@ -132,16 +128,15 @@ test('Integration Test: GET /pin/:orderId (Mobile Map Pin Drop Page)', async () 
   assert.ok(html.includes('ORD-999'));
 });
 
-test('Integration Test: POST /api/pin-confirm (Location Confirmation)', async () => {
+test('Integration Test: POST /api/pin-confirm requires token field (returns 400)', async () => {
   const res = await fetch(`${BASE_URL}/api/pin-confirm`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ orderId: 'ORD-999', lat: 11.0060, lng: 76.9543 }),
   });
   
-  assert.equal(res.status, 200);
-  const data = await res.json();
-  assert.equal(data.success, true);
+  // Pin-confirm now requires a valid 'token' field, not raw orderId (Phase 1.3)
+  assert.equal(res.status, 400);
 });
 
 test('Integration Test: Zod Schema validation rejects malformed order status update', async () => {

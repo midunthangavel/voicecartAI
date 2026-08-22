@@ -1,18 +1,25 @@
 /**
  * WhatsApp Receipt & Messaging Service
- * 
+ *
  * Sends rich visual order receipts via Twilio WhatsApp API.
  * Includes itemized list, total, delivery address, tracking link,
  * and a 1-tap reorder shortcut.
- * 
- * Falls back to mock console logging for development.
+ *
+ * SECURITY: Mock mode is explicitly gated on NODE_ENV === 'development'.
+ * Production will throw if Twilio credentials are missing or invalid.
  */
+
+import { AppError } from '../utils/AppError.js';
+import { logger } from '../utils/logger.js';
 
 const {
   TWILIO_ACCOUNT_SID,
   TWILIO_AUTH_TOKEN,
   TWILIO_WHATSAPP_NUMBER,
+  NODE_ENV,
 } = process.env;
+
+const IS_MOCK = (NODE_ENV === 'development' || NODE_ENV === 'test') && (!TWILIO_ACCOUNT_SID || TWILIO_ACCOUNT_SID === 'your_twilio_account_sid');
 
 /**
  * Send a WhatsApp order receipt to the customer
@@ -77,35 +84,43 @@ export async function sendWhatsAppPinDrop(phone, pinDropUrl) {
 }
 
 /**
- * Core WhatsApp sender (Twilio WhatsApp API or mock)
+ * Core WhatsApp sender — explicit mock gating
+ *
+ * SECURITY: Production never silently falls back to mock.
+ * If Twilio credentials are missing in production, throw an error.
  */
 async function sendWhatsApp(to, body) {
   // Normalise phone to WhatsApp format
   const whatsappTo = to.startsWith('whatsapp:') ? to : `whatsapp:${to}`;
 
-  if (TWILIO_ACCOUNT_SID && TWILIO_ACCOUNT_SID !== 'your_twilio_account_sid') {
-    try {
-      const { default: twilio } = await import('twilio');
-      const client = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
-      const fromNumber = TWILIO_WHATSAPP_NUMBER || 'whatsapp:+14155238886'; // Twilio sandbox default
-
-      const message = await client.messages.create({
-        body,
-        from: fromNumber.startsWith('whatsapp:') ? fromNumber : `whatsapp:${fromNumber}`,
-        to: whatsappTo,
-      });
-
-      console.log(`[WhatsApp] Sent to ${to}: ${message.sid}`);
-      return { success: true, sid: message.sid };
-    } catch (err) {
-      console.error('[WhatsApp] Twilio error:', err.message);
-    }
+  // Explicit mock mode — development only
+  if (IS_MOCK) {
+    logger.info(`[WhatsApp] Mock message to ${to} (NODE_ENV=development)`);
+    logger.debug(`[WhatsApp] Mock body: ${body.substring(0, 100)}...`);
+    return { success: true, sid: `mock_wa_${Date.now()}` };
   }
 
-  // Mock WhatsApp message
-  console.log(`[WhatsApp] Mock message to ${to}:`);
-  console.log(body);
-  return { success: true, sid: `mock_wa_${Date.now()}` };
+  // Production/staging: credentials are mandatory
+  if (!TWILIO_ACCOUNT_SID || TWILIO_ACCOUNT_SID === 'your_twilio_account_sid' || !TWILIO_AUTH_TOKEN) {
+    throw new AppError(
+      503,
+      'WHATSAPP_NOT_CONFIGURED',
+      'WhatsApp messaging is not configured. Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN.'
+    );
+  }
+
+  const { default: twilio } = await import('twilio');
+  const client = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
+  const fromNumber = TWILIO_WHATSAPP_NUMBER || 'whatsapp:+14155238886'; // Twilio sandbox default
+
+  const message = await client.messages.create({
+    body,
+    from: fromNumber.startsWith('whatsapp:') ? fromNumber : `whatsapp:${fromNumber}`,
+    to: whatsappTo,
+  });
+
+  logger.info(`[WhatsApp] Sent to ${to}: ${message.sid}`);
+  return { success: true, sid: message.sid };
 }
 
 // Export standard aliases

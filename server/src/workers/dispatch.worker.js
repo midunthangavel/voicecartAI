@@ -3,10 +3,15 @@ import { getDispatchProvider } from '../integrations/dispatch/DispatchProvider.j
 import { updateOrderStatus } from '../domain/orders/order.repository.js';
 import { createInitialDispatchState, transitionDispatch, DISPATCH_ACTIONS } from '../domain/dispatch/dispatchStateMachine.js';
 import { broadcastToDashboard } from '../websocket/dashboardWsHandler.js';
+import { withLock } from '../infra/lockService.js';
+import { logger } from '../utils/logger.js';
 
 /**
  * Dispatch Background Worker
+ *
  * Handles asynchronous restaurant dispatching via ONDC Beckn protocol or POS integration.
+ * Uses distributed locking to prevent duplicate dispatches when multiple workers
+ * process the same order event.
  */
 
 async function processOrderDispatch(data) {
@@ -16,40 +21,43 @@ async function processOrderDispatch(data) {
     throw new Error('[Worker:Dispatch] Explicit tenantId and restaurantId are required');
   }
 
-  console.log(`[Worker:Dispatch] Dispatching Order #${orderId} for ${callerPhone}...`);
+  // Distributed lock prevents duplicate dispatch when multiple workers
+  // pick up the same order event (e.g., outbox retry after crash)
+  return withLock(`dispatch:order:${orderId}`, async () => {
+    logger.info(`[Worker:Dispatch] Dispatching Order #${orderId} for ${callerPhone}...`);
 
-  const provider = getDispatchProvider();
-  const dispatchResult = await provider.dispatch(state, callerPhone, restaurantId);
+    const provider = getDispatchProvider();
+    const dispatchResult = await provider.dispatch(state, callerPhone, restaurantId);
 
-  if (dispatchResult.success) {
-    const dispatchState = createInitialDispatchState(orderId, dispatchResult.dispatch_mode);
-    const transition = transitionDispatch(dispatchState, DISPATCH_ACTIONS.ACCEPT_ORDER, {
-      merchant: dispatchResult.merchant,
-    });
+    if (dispatchResult.success) {
+      const dispatchState = createInitialDispatchState(orderId, dispatchResult.dispatch_mode);
+      const transition = transitionDispatch(dispatchState, DISPATCH_ACTIONS.ACCEPT_ORDER, {
+        merchant: dispatchResult.merchant,
+      });
 
-    await updateOrderStatus(orderId, 'dispatched', { tenantId, restaurantId });
+      await updateOrderStatus(orderId, 'dispatched', { tenantId, restaurantId });
 
-    broadcastToDashboard({
-      type: 'order_dispatched',
-      tenantId,
-      restaurantId,
-      orderId,
-      dispatchMode: dispatchResult.dispatch_mode,
-      ondcOrderId: dispatchResult.order_id,
-      merchant: dispatchResult.merchant || 'Sree Annapoorna',
-      estimatedTime: dispatchResult.estimated_time || '25-35 mins',
-      trackingUrl: dispatchResult.tracking_url,
-      dispatchState: transition.state,
-    });
+      broadcastToDashboard({
+        type: 'order_dispatched',
+        tenantId,
+        restaurantId,
+        orderId,
+        dispatchMode: dispatchResult.dispatch_mode,
+        ondcOrderId: dispatchResult.order_id,
+        merchant: dispatchResult.merchant || 'Sree Annapoorna',
+        estimatedTime: dispatchResult.estimated_time || '25-35 mins',
+        trackingUrl: dispatchResult.tracking_url,
+        dispatchState: transition.state,
+      });
 
-    console.log(`[Worker:Dispatch] Successfully dispatched Order #${orderId} via ${dispatchResult.dispatch_mode}`);
-    return dispatchResult;
-  }
+      logger.info(`[Worker:Dispatch] Successfully dispatched Order #${orderId} via ${dispatchResult.dispatch_mode}`);
+      return dispatchResult;
+    }
 
-  throw new Error(`Dispatch failed for Order #${orderId}`);
+    throw new Error(`Dispatch failed for Order #${orderId}`);
+  }, 30000); // 30s TTL — generous for external API calls
 }
 
 dispatchQueue.process('DISPATCH_ORDER', processOrderDispatch);
-dispatchQueue.process('DISPATCH_KITCHEN_ORDER', processOrderDispatch);
 
-console.log('[Workers] Dispatch Worker initialized and listening for jobs.');
+logger.info('[Workers] Dispatch Worker initialized and listening for jobs.');
