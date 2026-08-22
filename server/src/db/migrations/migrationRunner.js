@@ -114,6 +114,29 @@ export async function runMigrations(db) {
   await safeAddColumn('outbox_events', 'locked_at', 'TIMESTAMP');
   await safeAddColumn('outbox_events', 'locked_by', 'TEXT');
 
+  // ── Production Hardening: Pin Token Tenancy (P0-3) ──
+  await safeAddColumn('pin_tokens', 'tenant_id', 'TEXT');
+  await safeAddColumn('pin_tokens', 'restaurant_id', 'TEXT');
+
+  // ── Production Hardening: Integer Paise Monetary Columns ──
+  await safeAddColumn('orders', 'subtotal_paise', 'INTEGER DEFAULT 0');
+  await safeAddColumn('orders', 'tax_paise', 'INTEGER DEFAULT 0');
+  await safeAddColumn('orders', 'delivery_fee_paise', 'INTEGER DEFAULT 0');
+  await safeAddColumn('orders', 'discount_paise', 'INTEGER DEFAULT 0');
+  await safeAddColumn('orders', 'total_amount_paise', 'INTEGER DEFAULT 0');
+  await safeAddColumn('order_items', 'unit_price_paise', 'INTEGER DEFAULT 0');
+  await safeAddColumn('order_items', 'line_total_paise', 'INTEGER DEFAULT 0');
+
+  // ── Production Hardening: Delivery Coordinates ──
+  await safeAddColumn('orders', 'delivery_latitude', 'REAL');
+  await safeAddColumn('orders', 'delivery_longitude', 'REAL');
+
+  // ── Production Hardening: Idempotency TTL ──
+  await safeAddColumn('side_effect_idempotency', 'expires_at', 'TIMESTAMP');
+
+  // ── Production Hardening: Audit Chain Sequence Numbers ──
+  await safeAddColumn('audit_logs', 'sequence_number', 'INTEGER');
+
   // 3. Find and sort SQL files
   const files = readdirSync(migrationsDir)
     .filter(f => f.endsWith('.sql'))

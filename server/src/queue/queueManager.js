@@ -59,10 +59,13 @@ export function initQueueProcessors() {
   dispatchQueue.process('DISPATCH_ORDER', processDispatch);
 
   // 3. Audio Recording Storage Processor
+  // Accepts audioBuffer (Base64-encoded string from sessionPipeline) or audioBase64
   recordingQueue.process('PERSIST_CALL_AUDIO', async (data) => {
-    if (data.audioBuffer && data.callId) {
+    const audioData = data.audioBuffer || data.audioBase64;
+    if (audioData && data.callId) {
       logger.info(`[RecordingQueue] Persisting audio recording for call #${data.callId}`);
-      await storageService.saveAudio(data.audioBuffer, {
+      const audioBuffer = Buffer.isBuffer(audioData) ? audioData : Buffer.from(audioData, 'base64');
+      await storageService.saveAudio(audioBuffer, {
         callId: data.callId,
         tenantId: data.tenantId,
         restaurantId: data.restaurantId,

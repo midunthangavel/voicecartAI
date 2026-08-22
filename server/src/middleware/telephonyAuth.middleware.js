@@ -2,14 +2,37 @@ import crypto from 'crypto';
 
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
 const EXOTEL_API_TOKEN = process.env.EXOTEL_API_TOKEN;
-const IS_DEV = process.env.NODE_ENV !== 'production' || process.env.DEV_AUTH_BYPASS === 'true';
+
+/**
+ * SECURITY: Development bypass uses explicit allowlisting (=== 'development'),
+ * NOT exclusion (!== 'production'). This prevents misconfigured environments
+ * from accidentally entering the unauthenticated path.
+ */
+const IS_DEV = process.env.NODE_ENV === 'development';
+
+/**
+ * Timing-safe string comparison that handles mismatched buffer lengths
+ * without throwing. Returns false for any length mismatch.
+ */
+function safeTimingCompare(a, b) {
+  const left = Buffer.from(a || '', 'utf8');
+  const right = Buffer.from(b || '', 'utf8');
+
+  if (left.length !== right.length) {
+    // Prevent timing oracle: still perform a comparison against itself
+    crypto.timingSafeEqual(left, left);
+    return false;
+  }
+
+  return crypto.timingSafeEqual(left, right);
+}
 
 /**
  * Validates Twilio's HMAC-SHA1 signature over URL and POST parameters
  */
 export function verifyTwilioSignature(req, authToken = TWILIO_AUTH_TOKEN) {
   if (IS_DEV && !req.headers['x-twilio-signature']) {
-    return true; // Local developer bypass
+    return true; // Local developer bypass — only in NODE_ENV=development
   }
 
   const twilioSignature = req.headers['x-twilio-signature'];
@@ -32,10 +55,7 @@ export function verifyTwilioSignature(req, authToken = TWILIO_AUTH_TOKEN) {
     .update(Buffer.from(dataString, 'utf-8'))
     .digest('base64');
 
-  return crypto.timingSafeEqual(
-    Buffer.from(twilioSignature, 'utf-8'),
-    Buffer.from(expectedSignature, 'utf-8')
-  );
+  return safeTimingCompare(twilioSignature, expectedSignature);
 }
 
 /**
@@ -43,13 +63,13 @@ export function verifyTwilioSignature(req, authToken = TWILIO_AUTH_TOKEN) {
  */
 export function verifyExotelSignature(req, apiToken = EXOTEL_API_TOKEN) {
   if (IS_DEV && !req.headers['x-exotel-signature'] && !req.query.auth_token) {
-    return true; // Local developer bypass
+    return true; // Local developer bypass — only in NODE_ENV=development
   }
 
   const exotelSignature = req.headers['x-exotel-signature'] || req.query.auth_token;
   if (!exotelSignature || !apiToken) return false;
 
-  return exotelSignature === apiToken;
+  return safeTimingCompare(exotelSignature, apiToken);
 }
 
 /**

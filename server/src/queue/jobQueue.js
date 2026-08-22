@@ -183,7 +183,8 @@ export class JobQueue extends EventEmitter {
       logger.error(`[DurableQueue:${this.name}] Job #${jobRecord.id} failed (attempt ${jobRecord.attempts}/${jobRecord.max_retries}):`, err.message);
 
       if (jobRecord.attempts < jobRecord.max_retries) {
-        const backoffSec = Math.min(Math.pow(2, jobRecord.attempts - 1), 60);
+        const jitter = 0.5 + Math.random(); // [0.5, 1.5] to spread retries
+        const backoffSec = Math.min(Math.pow(2, jobRecord.attempts - 1) * jitter, 60);
         await dbRun(
           `UPDATE durable_job_queue 
            SET status = 'pending', 

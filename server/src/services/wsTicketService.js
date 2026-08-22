@@ -26,17 +26,20 @@ export async function createWsTicket(userContext) {
 }
 
 /**
- * Consume and immediately invalidate a single-use WebSocket ticket atomically across cluster
+ * Consume and immediately invalidate a single-use WebSocket ticket.
+ *
+ * SECURITY: Uses GETDEL (atomic get-and-delete) to prevent race conditions
+ * where two concurrent requests could both consume the same ticket.
+ * Previously used separate GET + DEL which allowed a TOCTOU vulnerability.
  */
 export async function consumeWsTicket(ticket) {
   if (!ticket || typeof ticket !== 'string') return null;
 
   const key = `wst:${ticket}`;
-  const record = await redisClient.get(key);
-  if (!record) return null;
 
-  // Single-use: delete immediately
-  await redisClient.del(key);
+  // Atomic get-and-delete — prevents race condition
+  const record = await redisClient.getdel(key);
+  if (!record) return null;
 
   try {
     return typeof record === 'string' ? JSON.parse(record) : record;
@@ -66,16 +69,18 @@ export async function createStreamTicket(callMetadata = {}) {
 }
 
 /**
- * Consume and invalidate a single-use stream ticket atomically across cluster
+ * Consume and invalidate a single-use stream ticket atomically.
+ *
+ * SECURITY: Uses GETDEL for atomic consumption, same as consumeWsTicket.
  */
 export async function consumeStreamTicket(ticket) {
   if (!ticket || typeof ticket !== 'string') return null;
 
   const key = `strm:${ticket}`;
-  const record = await redisClient.get(key);
-  if (!record) return null;
 
-  await redisClient.del(key);
+  // Atomic get-and-delete — prevents race condition
+  const record = await redisClient.getdel(key);
+  if (!record) return null;
 
   try {
     return typeof record === 'string' ? JSON.parse(record) : record;

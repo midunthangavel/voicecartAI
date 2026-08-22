@@ -176,65 +176,107 @@ export async function renderPinDropPage(req, res, next) {
 }
 
 /**
- * Handle Pin-Drop Coordinate Confirmation with Token Verification
+ * Handle Pin-Drop Coordinate Confirmation — Token-Only Authentication
+ *
+ * SECURITY: Legacy orderId fallback has been removed. All pin confirmations
+ * MUST use a cryptographic token issued during the call session.
+ * Token consumption is atomic to prevent replay attacks.
+ * Tenant/restaurant scoping is enforced on the order update.
  */
 export async function handlePinConfirm(req, res, next) {
   try {
-    const { token, orderId, lat, lng } = req.body;
-    const identifier = token || orderId;
+    const { token, lat, lng } = req.body;
 
-    if (!identifier) {
-      return next(new AppError(400, 'MISSING_TOKEN', 'Confirmation token is required'));
+    // 1. Require cryptographic token — no legacy orderId fallback
+    if (!token || typeof token !== 'string') {
+      return next(new AppError(400, 'TOKEN_REQUIRED', 'A valid confirmation token is required'));
     }
 
-    const tokenHash = crypto.createHash('sha256').update(String(identifier)).digest('hex');
+    // 2. Validate coordinates
+    const latitude = Number(lat);
+    const longitude = Number(lng);
 
-    // 1. Check if token exists in pin_tokens table
+    if (
+      !Number.isFinite(latitude) ||
+      !Number.isFinite(longitude) ||
+      latitude < -90 || latitude > 90 ||
+      longitude < -180 || longitude > 180
+    ) {
+      return next(new AppError(400, 'INVALID_COORDINATES', 'Invalid coordinates. Latitude must be [-90, 90] and longitude [-180, 180]'));
+    }
+
+    // 3. Hash the token and look up the record
+    const tokenHash = crypto.createHash('sha256').update(String(token)).digest('hex');
+
     const tokenRecord = await dbGet(
-      'SELECT * FROM pin_tokens WHERE token_hash = ?',
+      `SELECT id, order_id, tenant_id, restaurant_id, expires_at, used_at
+       FROM pin_tokens
+       WHERE token_hash = ?`,
       [tokenHash]
     );
 
-    let targetOrderId = null;
-
-    if (tokenRecord) {
-      if (tokenRecord.used_at) {
-        return next(new AppError(409, 'TOKEN_ALREADY_USED', 'This location link has already been confirmed'));
-      }
-      if (new Date(tokenRecord.expires_at) < new Date()) {
-        return next(new AppError(410, 'TOKEN_EXPIRED', 'This location confirmation link has expired'));
-      }
-
-      targetOrderId = tokenRecord.order_id;
-    } else {
-      // Legacy fallback for direct orderId or alphanumeric order codes in dev/testing
-      const digitsOnly = String(identifier).replace(/\D/g, '');
-      targetOrderId = digitsOnly ? parseInt(digitsOnly, 10) : (parseInt(identifier, 10) || 1);
+    if (!tokenRecord) {
+      return next(new AppError(404, 'INVALID_TOKEN', 'Invalid or unknown confirmation token'));
     }
 
-    if (!targetOrderId) {
-      return next(new AppError(404, 'INVALID_TOKEN', 'Invalid or unknown confirmation link'));
+    if (tokenRecord.used_at) {
+      return next(new AppError(409, 'TOKEN_ALREADY_USED', 'This location link has already been confirmed'));
     }
 
+    if (new Date(tokenRecord.expires_at) <= new Date()) {
+      return next(new AppError(410, 'TOKEN_EXPIRED', 'This location confirmation link has expired'));
+    }
+
+    const targetOrderId = tokenRecord.order_id;
+    const tokenTenantId = tokenRecord.tenant_id;
+    const tokenRestaurantId = tokenRecord.restaurant_id;
+
+    // 4. Atomically consume the token and update the order within a transaction
     await transaction(async () => {
-      await dbRun(
-        'UPDATE orders SET delivery_address = delivery_address || ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-        [` [PIN: ${Number(lat).toFixed(6)},${Number(lng).toFixed(6)}]`, targetOrderId]
+      // Atomic token consumption — only succeeds if token is still unused
+      const consumeResult = await dbRun(
+        `UPDATE pin_tokens
+         SET used_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND used_at IS NULL AND expires_at > CURRENT_TIMESTAMP`,
+        [tokenRecord.id]
       );
 
-      if (tokenRecord) {
-        await dbRun(
-          'UPDATE pin_tokens SET used_at = CURRENT_TIMESTAMP WHERE id = ?',
-          [tokenRecord.id]
-        );
+      if (consumeResult.changes !== 1) {
+        throw new AppError(409, 'TOKEN_ALREADY_USED', 'Token was consumed by another request');
+      }
+
+      // Update order with tenant/restaurant scoping
+      const updateResult = await dbRun(
+        `UPDATE orders
+         SET delivery_latitude = ?,
+             delivery_longitude = ?,
+             delivery_address = delivery_address || ?,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?
+           AND tenant_id = ?
+           AND restaurant_id = ?`,
+        [
+          latitude,
+          longitude,
+          ` [PIN: ${latitude.toFixed(6)},${longitude.toFixed(6)}]`,
+          targetOrderId,
+          tokenTenantId,
+          tokenRestaurantId,
+        ]
+      );
+
+      if (updateResult.changes === 0) {
+        throw new AppError(404, 'ORDER_NOT_FOUND', 'Order not found for this tenant/restaurant');
       }
     });
 
     broadcastToDashboard({
       type: 'pin_confirmed',
       orderId: targetOrderId,
-      lat: Number(lat),
-      lng: Number(lng),
+      tenantId: tokenTenantId,
+      restaurantId: tokenRestaurantId,
+      lat: latitude,
+      lng: longitude,
     });
 
     res.json({ success: true, order_id: targetOrderId });

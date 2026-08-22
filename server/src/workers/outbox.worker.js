@@ -83,6 +83,22 @@ async function processOutboxEvent(event) {
         break;
       }
 
+      case 'PIN_DROP_REQUESTED': {
+        const { phone, pinUrl } = event.payload;
+        if (phone) {
+          await enqueueNotificationJob('SEND_NOTIFICATION', {
+            type: 'pin_drop_request',
+            idempotencyKey: `notif_pindrop_${event.aggregate_id}`,
+            phone,
+            orderId: event.aggregate_id,
+            pinUrl,
+            tenantId: event.tenant_id,
+            restaurantId: event.restaurant_id,
+          });
+        }
+        break;
+      }
+
       default:
         logger.warn(`[OutboxWorker] Unhandled event_type: ${event.event_type}`);
     }

@@ -68,10 +68,19 @@ export async function touchSession(sessionId, ttlSeconds = DEFAULT_TTL_SECONDS) 
  * List all active sessions across cluster filtered by tenant and restaurant
  */
 export async function listActiveSessions(tenantId = null, restaurantId = null) {
-  const keys = await redisClient.keys(`${SESSION_PREFIX}*`);
+  // Use SCAN instead of KEYS to avoid blocking the Redis event loop (O(N) operation)
+  const allKeys = [];
+  let cursor = '0';
+
+  do {
+    const [nextCursor, batch] = await redisClient.scan(cursor, 'MATCH', `${SESSION_PREFIX}*`, 'COUNT', 500);
+    cursor = nextCursor;
+    allKeys.push(...batch);
+  } while (cursor !== '0');
+
   const active = [];
 
-  for (const key of keys) {
+  for (const key of allKeys) {
     const raw = await redisClient.get(key);
     if (raw) {
       try {
@@ -83,7 +92,10 @@ export async function listActiveSessions(tenantId = null, restaurantId = null) {
         if (restaurantId && sRest && sRest !== restaurantId) continue;
 
         active.push(session);
-      } catch {}
+      } catch (err) {
+        // Warn instead of silently swallowing parse errors
+        console.warn(`[SessionStore] Failed to parse session ${key}:`, err.message);
+      }
     }
   }
 

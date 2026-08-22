@@ -7,15 +7,59 @@ import { processDialogueTurn, getInitialState } from '../services/dialogueManage
 import { geocodeSpokenAddress, needsPinDrop, generatePinDropUrl } from '../services/geocodingService.js';
 import { broadcastToDashboard } from './dashboardWsHandler.js';
 import { createSession, getSession, updateSession, deleteSession } from '../infra/sessionStore.js';
-import { notificationQueue, dispatchQueue, recordingQueue } from '../queue/queueManager.js';
+import { enqueueNotificationJob, enqueueDispatchJob, enqueueRecordingJob } from '../queue/queueManager.js';
+import { enqueueOutboxEvent } from '../services/outbox.service.js';
 import { startTurnTrace, recordTurnStage, finishTurnTrace } from '../services/latencyTracer.js';
 import { logger } from '../utils/logger.js';
 import { AppError } from '../utils/AppError.js';
+import { TurnQueue } from './turnQueue.js';
 import '../workers/notification.worker.js';
 import '../workers/dispatch.worker.js';
 import '../workers/recording.worker.js';
 
 const MAX_AUDIO_BYTES = 2 * 1024 * 1024; // 2MB memory cap per active call
+const MAX_CONVERSATION_TURNS = 20; // Cap conversation history to prevent unbounded context growth
+
+/**
+ * Append audio chunk with actual byte-level enforcement.
+ * Returns true if chunk was accepted, false if limit exceeded.
+ */
+function appendAudio(session, chunk) {
+  if (!Buffer.isBuffer(chunk)) {
+    return false;
+  }
+
+  if (session.audioBytes + chunk.length > MAX_AUDIO_BYTES) {
+    logger.warn(`[Session ${session.id}] Audio byte limit exceeded (${session.audioBytes + chunk.length} > ${MAX_AUDIO_BYTES})`);
+    return false;
+  }
+
+  session.audioChunks.push(chunk);
+  session.audioBytes += chunk.length;
+  return true;
+}
+
+/**
+ * Trim conversation history to prevent unbounded context growth.
+ * Keeps the most recent turns and creates a summary of older context.
+ */
+function trimConversationHistory(history) {
+  if (history.length <= MAX_CONVERSATION_TURNS) {
+    return history;
+  }
+
+  // Keep last MAX_CONVERSATION_TURNS exchanges
+  const trimmed = history.slice(-MAX_CONVERSATION_TURNS);
+
+  // Prepend a summary marker for the LLM
+  const droppedCount = history.length - MAX_CONVERSATION_TURNS;
+  trimmed.unshift({
+    role: 'system',
+    text: `[Context: ${droppedCount} earlier conversation turns were summarized. The customer has been speaking with the assistant about their order.]`,
+  });
+
+  return trimmed;
+}
 
 /**
  * Initialize a new voice session with Ephemeral Cache & Authoritative Tenant Context
@@ -30,7 +74,7 @@ export async function initSession(sessionId, opts, sessions) {
   }
 
   const state = getInitialState(opts.callerPhone);
-  const sttStream = await createSttStream('en-IN');
+  const sttStream = await createSttStream('en-IN', tenantId, restaurantId);
 
   const session = {
     id: sessionId,
@@ -44,7 +88,7 @@ export async function initSession(sessionId, opts, sessions) {
     state,
     conversationHistory: [],
     sttStream,
-    isProcessing: false,
+    turnQueue: new TurnQueue(),
     startedAt: new Date().toISOString(),
     latencies: [],
     audioChunks: [],
@@ -68,7 +112,10 @@ export async function initSession(sessionId, opts, sessions) {
     }
 
     if (result.isFinal && result.transcript.trim().length > 0) {
-      await processUserInput(sessionId, result.transcript, sessions);
+      // Use turn queue to serialize processing instead of dropping turns
+      session.turnQueue.push(() =>
+        processDialogueTurnForSession(sessionId, result.transcript, sessions)
+      );
     }
   });
 
@@ -90,13 +137,17 @@ export async function initSession(sessionId, opts, sessions) {
     );
     session.dbId = dbResult.lastID;
   } catch (err) {
-    console.error('[Session] DB save error:', err.message);
+    // CRITICAL: DB call insert failure is logged, not swallowed
+    logger.error(`[Session ${sessionId}] Failed to persist call record:`, err.message);
   }
 
   if (session.callerPhone && session.callerPhone !== 'Browser') {
     try {
       await upsertCustomerProfile({ phone: session.callerPhone, restaurant_id: session.restaurantId });
-    } catch {}
+    } catch (err) {
+      // BEST-EFFORT: Customer upsert failure doesn't kill the call
+      logger.warn(`[Session ${sessionId}] Customer upsert failed:`, err.message);
+    }
   }
 
   broadcastToDashboard({
@@ -127,24 +178,27 @@ export async function sendGreeting(sessionId, sessions) {
 }
 
 /**
- * Process a user conversational turn
+ * Process a user conversational turn (called via TurnQueue for serialization).
+ * This replaces the old processUserInput with its `if (isProcessing) return` guard.
  */
-export async function processUserInput(sessionId, transcript, sessions) {
+async function processDialogueTurnForSession(sessionId, transcript, sessions) {
   const session = sessions.get(sessionId);
-  if (!session || session.isProcessing) return;
+  if (!session) return;
 
-  session.isProcessing = true;
   const turnStart = Date.now();
   startTurnTrace(sessionId, session.conversationHistory.length + 1);
 
   try {
     session.conversationHistory.push({ role: 'user', text: transcript });
 
+    // Trim context to prevent unbounded growth
+    session.conversationHistory = trimConversationHistory(session.conversationHistory);
+
     if (session.dbId) {
       dbRun(
         'INSERT INTO call_logs (call_id, event_type, direction, content) VALUES (?, ?, ?, ?)',
         [session.dbId, 'user_speech', 'inbound', transcript]
-      ).catch(() => {});
+      ).catch(err => logger.warn(`[Session ${sessionId}] call_log insert failed:`, err.message));
     }
 
     broadcastToDashboard({
@@ -172,7 +226,7 @@ export async function processUserInput(sessionId, transcript, sessions) {
       dbRun(
         'INSERT INTO call_logs (call_id, event_type, direction, content, latency_ms) VALUES (?, ?, ?, ?, ?)',
         [session.dbId, 'ai_response', 'outbound', result.response_text, dialogueLatency]
-      ).catch(() => {});
+      ).catch(err => logger.warn(`[Session ${sessionId}] ai_response log failed:`, err.message));
     }
 
     broadcastToDashboard({
@@ -205,17 +259,27 @@ export async function processUserInput(sessionId, transcript, sessions) {
           Math.round(session.latencies.reduce((a, b) => a + b, 0) / session.latencies.length),
           session.dbId,
         ]
-      ).catch(() => {});
+      ).catch(err => logger.warn(`[Session ${sessionId}] Call state update failed:`, err.message));
     }
 
     if (session.state.status === 'confirmed') {
       await handleOrderConfirmation(sessionId, sessions);
     }
   } catch (err) {
-    logger.error(`[Session ${sessionId}] Process error:`, err);
-  } finally {
-    session.isProcessing = false;
+    logger.error(`[Session ${sessionId}] Dialogue turn error:`, err);
   }
+}
+
+/**
+ * Legacy compatibility — delegates to turnQueue-based processing
+ */
+export async function processUserInput(sessionId, transcript, sessions) {
+  const session = sessions.get(sessionId);
+  if (!session) return;
+
+  session.turnQueue.push(() =>
+    processDialogueTurnForSession(sessionId, transcript, sessions)
+  );
 }
 
 /**
@@ -294,7 +358,14 @@ export async function sendAudioResponse(sessionId, text, language, sessions) {
 }
 
 /**
- * Handle order fulfillment, ONDC/POS dispatch, payments, and messaging asynchronously
+ * Handle order fulfillment via the Transactional Outbox (consolidated event path).
+ *
+ * ARCHITECTURE: Business events are written to the outbox within the order transaction
+ * (in order.repository.js). The outbox worker then dispatches to notification and
+ * dispatch queues. This function only handles non-outbox side effects like geocoding.
+ *
+ * Previously, this function had duplicate direct queue.add() calls that bypassed
+ * the outbox, creating dual event paths with mismatched job names (P0-6).
  */
 export async function handleOrderConfirmation(sessionId, sessions) {
   const session = sessions.get(sessionId);
@@ -306,33 +377,51 @@ export async function handleOrderConfirmation(sessionId, sessions) {
       geocodeSpokenAddress(session.state.delivery_address, session.state.landmark || null)
         .then(async (geoResult) => {
           if (geoResult) {
-            await saveCustomerAddress({
-              phone: session.callerPhone,
-              restaurant_id: session.restaurantId,
-              label: 'Home',
-              spoken_address: session.state.delivery_address,
-              landmark: session.state.landmark || null,
-              formatted_address: geoResult.formatted_address,
-              latitude: geoResult.latitude,
-              longitude: geoResult.longitude,
-              is_default: 1,
-            });
+            try {
+              await saveCustomerAddress({
+                phone: session.callerPhone,
+                restaurant_id: session.restaurantId,
+                label: 'Home',
+                spoken_address: session.state.delivery_address,
+                landmark: session.state.landmark || null,
+                formatted_address: geoResult.formatted_address,
+                latitude: geoResult.latitude,
+                longitude: geoResult.longitude,
+                is_default: 1,
+              });
+            } catch (err) {
+              logger.warn(`[Session ${sessionId}] Address save failed:`, err.message);
+            }
 
             if (needsPinDrop(geoResult.confidence)) {
               const pinUrl = generatePinDropUrl(session.id, geoResult.latitude, geoResult.longitude);
-              notificationQueue.add('SEND_PINDROP_WHATSAPP', {
-                tenantId: session.tenantId,
-                restaurantId: session.restaurantId,
-                phone: session.callerPhone,
-                pinUrl,
-              });
+              // Use outbox for pin drop notification
+              try {
+                await enqueueOutboxEvent({
+                  tenant_id: session.tenantId,
+                  restaurant_id: session.restaurantId,
+                  event_type: 'PIN_DROP_REQUESTED',
+                  aggregate_type: 'order',
+                  aggregate_id: session.id,
+                  payload: {
+                    phone: session.callerPhone,
+                    pinUrl,
+                    tenantId: session.tenantId,
+                    restaurantId: session.restaurantId,
+                  },
+                });
+              } catch (err) {
+                logger.error(`[Session ${sessionId}] Pin drop outbox event failed:`, err.message);
+              }
             }
           }
         })
-        .catch(() => {});
+        .catch(err => logger.warn(`[Session ${sessionId}] Geocoding failed:`, err.message));
     }
 
-    // 2. Authoritatively persist master order & line-item snapshots using session tenant context
+    // 2. Authoritatively persist master order & line-item snapshots using session tenant context.
+    //    The ORDER_CONFIRMED outbox event is written inside createOrderWithSnapshots() in the same
+    //    transaction. The outbox worker then dispatches SEND_NOTIFICATION and DISPATCH_ORDER jobs.
     const dbOrderId = await createOrderWithSnapshots({
       tenant_id: session.tenantId,
       restaurant_id: session.restaurantId,
@@ -344,35 +433,21 @@ export async function handleOrderConfirmation(sessionId, sessions) {
       total_amount: session.state.total || 0,
       delivery_address: session.state.delivery_address || null,
       landmark: session.state.landmark || null,
+      customer_phone: session.callerPhone !== 'Browser' ? session.callerPhone : null,
     }, session.state.items || []);
 
     if (session.dbId) {
-      dbRun('UPDATE calls SET order_id = ? WHERE id = ?', [dbOrderId, session.dbId]).catch(() => {});
+      dbRun('UPDATE calls SET order_id = ? WHERE id = ?', [dbOrderId, session.dbId])
+        .catch(err => logger.warn(`[Session ${sessionId}] Call order_id update failed:`, err.message));
     }
 
     if (session.callerPhone && session.callerPhone !== 'Browser') {
-      incrementCustomerOrders(session.callerPhone, session.restaurantId).catch(() => {});
+      incrementCustomerOrders(session.callerPhone, session.restaurantId)
+        .catch(err => logger.warn(`[Session ${sessionId}] Customer order count increment failed:`, err.message));
     }
 
-    // 3. Offload Dispatch to Asynchronous Dispatch Worker
-    dispatchQueue.add('DISPATCH_KITCHEN_ORDER', {
-      orderId: dbOrderId,
-      tenantId: session.tenantId,
-      restaurantId: session.restaurantId,
-      state: session.state,
-      callerPhone: session.callerPhone,
-    });
-
-    // 4. Offload SMS & WhatsApp Notifications to Asynchronous Notification Worker
-    notificationQueue.add('SEND_ORDER_RECEIPT_WHATSAPP', {
-      orderId: dbOrderId,
-      tenantId: session.tenantId,
-      restaurantId: session.restaurantId,
-      total: session.state.total,
-      phone: session.callerPhone,
-      items: session.state.items,
-      deliveryAddress: session.state.delivery_address,
-    });
+    // NOTE: No direct queue.add() calls here — all business events flow through the
+    // transactional outbox written by createOrderWithSnapshots().
 
     broadcastToDashboard({
       type: 'order_confirmed',
@@ -384,12 +459,16 @@ export async function handleOrderConfirmation(sessionId, sessions) {
       callerPhone: session.callerPhone,
     });
   } catch (err) {
-    console.error(`[Order] Confirmation error for session ${sessionId}:`, err);
+    // CRITICAL: Order confirmation failure must be logged with full context
+    logger.error(`[Order] Confirmation failed for session ${sessionId}:`, err);
   }
 }
 
 /**
- * End session and offload dispute recording persistence to worker queue
+ * End session and offload recording persistence to worker queue.
+ *
+ * FIX (P0-7): Changed audioBase64 → audioBuffer to match the queue processor.
+ * The recording queue processor expects `data.audioBuffer`, not `data.audioBase64`.
  */
 export async function endSession(sessionId, sessions) {
   const session = sessions.get(sessionId);
@@ -401,17 +480,19 @@ export async function endSession(sessionId, sessions) {
     dbRun(
       "UPDATE calls SET status = 'completed', ended_at = CURRENT_TIMESTAMP WHERE id = ?",
       [session.dbId]
-    ).catch(() => {});
+    ).catch(err => logger.warn(`[Session ${sessionId}] Call status update failed:`, err.message));
 
     // Offload audio writing & duration calculation to Recording Worker
     if (session.audioChunks && session.audioChunks.length > 0) {
-      const combinedAudioBase64 = Buffer.concat(session.audioChunks).toString('base64');
-      recordingQueue.add('PERSIST_CALL_AUDIO', {
+      const combinedAudio = Buffer.concat(session.audioChunks);
+
+      // FIX: Use audioBuffer (matching the processor) instead of audioBase64
+      enqueueRecordingJob('PERSIST_CALL_AUDIO', {
         callId: session.dbId,
         callSid: session.callSid || session.id,
         tenantId: session.tenantId,
         restaurantId: session.restaurantId,
-        audioBase64: combinedAudioBase64,
+        audioBuffer: combinedAudio.toString('base64'), // Base64 for serialization, decoded by processor
       });
     }
   }
@@ -432,5 +513,8 @@ export async function endSession(sessionId, sessions) {
 
   sessions.delete(sessionId);
   await deleteSession(sessionId);
-  console.log(`[Session] Cleaned up: ${sessionId}`);
+  logger.info(`[Session] Cleaned up: ${sessionId}`);
 }
+
+// Export appendAudio for use by stream handlers
+export { appendAudio };

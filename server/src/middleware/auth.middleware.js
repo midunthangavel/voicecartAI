@@ -3,9 +3,14 @@ import { AppError } from '../utils/AppError.js';
 
 /**
  * Authentication Middleware
- * 
+ *
  * Verifies JWT token and binds authenticated identity directly to `req.auth`.
  * Mandatory by default across all protected routes.
+ *
+ * SECURITY: Query-string JWT authentication has been removed.
+ * WebSocket auth should use the ticket mechanism (wsTicketService.js) exclusively.
+ * Allowing tokens in URLs exposes them in server logs, browser history,
+ * referrer headers, and proxy caches.
  */
 export function authMiddleware(options = { required: true }) {
   const { required = true } = options;
@@ -16,9 +21,8 @@ export function authMiddleware(options = { required: true }) {
 
     if (authHeader && authHeader.startsWith('Bearer ')) {
       token = authHeader.substring(7).trim();
-    } else if (req.query?.access_token) {
-      token = req.query.access_token;
     }
+    // REMOVED: req.query?.access_token fallback (security risk — tokens in URLs)
 
     if (!token) {
       if (required) {

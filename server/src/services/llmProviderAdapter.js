@@ -69,7 +69,10 @@ function getFallbackChain() {
 
 // ── OpenAI-Compatible API Call (Ollama, Groq, OpenRouter) ──
 
-async function callOpenAiCompatible(provider, systemPrompt, messages) {
+const VOICE_LLM_TIMEOUT_MS = 3000;  // Voice calls need < 3s TTFT
+const BATCH_LLM_TIMEOUT_MS = 30000; // Non-voice operations can wait longer
+
+async function callOpenAiCompatible(provider, systemPrompt, messages, options = {}) {
   const config = PROVIDERS[provider];
   const apiKey = config.envKey ? process.env[config.envKey] : 'ollama';
   if (config.envKey && !apiKey) throw new Error(`${config.name} API key not configured`);
@@ -97,7 +100,7 @@ async function callOpenAiCompatible(provider, systemPrompt, messages) {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(30000), // 30s timeout for local/cloud LLM inference
+    signal: AbortSignal.timeout(options.timeoutMs || BATCH_LLM_TIMEOUT_MS),
   });
 
   if (!response.ok) {
@@ -223,22 +226,27 @@ function parseLlmResponse(content) {
  * @param {Array} messages - Conversation history in OpenAI format [{role, content}]
  * @returns {Object|null} - Parsed response { response_text, updated_state, detected_language, provider, latency_ms } or null if all fail
  */
-export async function callLlm(systemPrompt, messages) {
+export async function callLlm(systemPrompt, messages, options = {}) {
   const chain = getFallbackChain();
+  const isVoiceCall = options.isVoiceCall || false;
+  const timeoutMs = isVoiceCall ? VOICE_LLM_TIMEOUT_MS : BATCH_LLM_TIMEOUT_MS;
 
-  if (chain.length === 0) {
+  // Voice calls: only try primary provider to avoid cascading latency
+  const effectiveChain = isVoiceCall ? chain.slice(0, 1) : chain;
+
+  if (effectiveChain.length === 0) {
     console.warn('[LLM] No LLM providers configured. Falling back to rule engine.');
     return null;
   }
 
-  for (const providerKey of chain) {
+  for (const providerKey of effectiveChain) {
     try {
       let raw;
 
       if (PROVIDERS[providerKey].format === 'gemini') {
         raw = await callGemini(systemPrompt, messages);
       } else {
-        raw = await callOpenAiCompatible(providerKey, systemPrompt, messages);
+        raw = await callOpenAiCompatible(providerKey, systemPrompt, messages, { timeoutMs });
       }
 
       const parsed = parseLlmResponse(raw.content);

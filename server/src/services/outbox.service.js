@@ -124,8 +124,9 @@ export async function markOutboxEventFailed(id, errorMsg) {
   const isDead = nextRetry >= (event.max_retries || 5);
   const status = isDead ? 'failed' : 'pending';
 
-  // Exponential backoff: 5s, 20s, 60s, 300s
-  const backoffSec = Math.min(5 * Math.pow(2, nextRetry), 300);
+  // Exponential backoff with jitter: spread retries to avoid thundering herd
+  const jitter = 0.5 + Math.random(); // [0.5, 1.5]
+  const backoffSec = Math.min(5 * Math.pow(2, nextRetry) * jitter, 300);
 
   return dbRun(
     `UPDATE outbox_events 

@@ -55,11 +55,21 @@ const DEFAULT_HINTS = [
 ];
 
 /**
- * Load additional STT hints from catalog database
+ * Load additional STT hints from catalog database, scoped to tenant/restaurant.
+ * Falls back to DEFAULT_HINTS if tenant context is not available.
  */
-async function loadCatalogHints() {
+async function loadCatalogHints(tenantId = null, restaurantId = null) {
   try {
-    const rows = await dbAll('SELECT stt_hints FROM catalog WHERE available = 1');
+    let rows;
+    if (tenantId && restaurantId) {
+      rows = await dbAll(
+        'SELECT stt_hints FROM catalog_items WHERE available = 1 AND tenant_id = ? AND restaurant_id = ?',
+        [tenantId, restaurantId]
+      );
+    } else {
+      rows = await dbAll('SELECT stt_hints FROM catalog_items WHERE available = 1');
+    }
+
     const hints = new Set(DEFAULT_HINTS);
     for (const row of rows) {
       try {
@@ -326,9 +336,9 @@ function createWavFromPcm(pcmBuffer, sampleRate = 8000) {
  * Create an STT streaming session based on configured provider.
  * Returns an object with { write(audioChunk), onTranscript(cb), end() }
  */
-export async function createSttStream(language = 'en-IN') {
+export async function createSttStream(language = 'en-IN', tenantId = null, restaurantId = null) {
   const provider = process.env.AI_STT_PROVIDER || 'mock';
-  const hints = await loadCatalogHints();
+  const hints = await loadCatalogHints(tenantId, restaurantId);
 
   // ── Groq Whisper (batch mode with VAD-like chunking) ──
   if (provider === 'groq' && process.env.GROQ_API_KEY) {

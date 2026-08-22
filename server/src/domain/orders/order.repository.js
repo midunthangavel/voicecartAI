@@ -56,13 +56,14 @@ export async function createOrderWithSnapshots(orderData, items = []) {
   const totalAmountPaise = Math.round(total_amount * 100);
 
   return transaction(async () => {
-    // 1. Insert master order record
+    // 1. Insert master order record with authoritative paise columns
     const res = await dbRun(
       `INSERT INTO orders (
          tenant_id, restaurant_id, call_id, customer_id, ondc_order_id, status,
-         subtotal, tax, delivery_fee, discount, total_amount, currency,
-         payment_status, payment_link, delivery_address, landmark, items, scheduled_for, version
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+         subtotal, tax, delivery_fee, discount, total_amount,
+         subtotal_paise, tax_paise, delivery_fee_paise, discount_paise, total_amount_paise,
+         currency, payment_status, payment_link, delivery_address, landmark, items, scheduled_for, version
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
       [
         tenantId,
         restaurantId,
@@ -70,11 +71,16 @@ export async function createOrderWithSnapshots(orderData, items = []) {
         customer_id,
         ondc_order_id,
         status,
-        subtotalPaise / 100,
+        subtotalPaise / 100,    // float (backward compat)
         taxPaise / 100,
         deliveryFeePaise / 100,
         discountPaise / 100,
         totalAmountPaise / 100,
+        subtotalPaise,           // integer paise (authoritative)
+        taxPaise,
+        deliveryFeePaise,
+        discountPaise,
+        totalAmountPaise,
         currency,
         payment_status,
         payment_link,
@@ -96,15 +102,18 @@ export async function createOrderWithSnapshots(orderData, items = []) {
 
       await dbRun(
         `INSERT INTO order_items (
-           order_id, catalog_item_id, item_name_snapshot, unit_price_snapshot, quantity, line_total
-         ) VALUES (?, ?, ?, ?, ?, ?)`,
+           order_id, catalog_item_id, item_name_snapshot, unit_price_snapshot, quantity, line_total,
+           unit_price_paise, line_total_paise
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           orderId,
           item.catalog_item_id || null,
           item.name || item.item_name_snapshot || 'Item',
-          unitPricePaise / 100,
+          unitPricePaise / 100,     // float (backward compat)
           qty,
-          lineTotalPaise / 100,
+          lineTotalPaise / 100,     // float (backward compat)
+          unitPricePaise,           // integer paise (authoritative)
+          lineTotalPaise,           // integer paise (authoritative)
         ]
       );
     }

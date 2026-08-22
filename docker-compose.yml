@@ -23,7 +23,10 @@ services:
       - voicecart-data:/app/data
       - voicecart-recordings:/app/server/recordings
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3001/api/engine-status"]
       interval: 20s
@@ -34,15 +37,23 @@ services:
     image: redis:7-alpine
     container_name: voicecart-redis
     restart: unless-stopped
-    ports:
-      - "6379:6379"
+    # SECURITY: Redis is not exposed to the host network.
+    # Only accessible via the 'backend' bridge network between containers.
+    expose:
+      - "6379"
     volumes:
       - redis-data:/data
+    networks:
+      - backend
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 3s
       retries: 3
+
+networks:
+  backend:
+    driver: bridge
 
 volumes:
   voicecart-data:
